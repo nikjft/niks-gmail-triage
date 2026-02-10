@@ -12,6 +12,7 @@ A "vibe coded" Google Apps Script that uses Google's Gemini AI to triage your in
 -   **Safety Mode**: By default, "destructive" actions (Archive/Block) only apply a label (`ai_archive`, `ai_block`) so you can review them.
 -   **Non-Exclusive Actions**: An email can be Starred, Drafted, AND trigger a Notification simultaneously.
 -   **Batch Processing**: Processes emails in batches to save costs and time.
+-   **Timestamp Tracking**: Tracks the last processed time to ensure no new messages in threads are missed.
 -   **Webhooks**: Can trigger a generic webhook (e.g., Zapier, Pushover) for urgent notifications.
 
 ## Setup Guide
@@ -44,7 +45,7 @@ Open `Config.js` and tweak:
 1.  Open `Main.js`.
 2.  Run `processIncomingMail()`.
 3.  Check the "Execution Transcript" log to see what it did.
-4.  Check your Gmail to see the labels applied (`ai_processed`, `ai_draft`, etc.).
+4.  Check your Gmail to see the labels applied (`ai_draft`, `ai_star`, etc.).
 
 ### 5. Automate It
 1.  Go to **Triggers** (clock icon) in Apps Script.
