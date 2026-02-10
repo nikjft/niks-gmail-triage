@@ -53,25 +53,58 @@ function processIncomingMail() {
 
 	for (var i = 0; i < uniqueThreads.length; i++) {
 		var thread = uniqueThreads[i];
-		var message = thread.getMessages()[0]; // Get the first message
-		var msgId = "msg_" + i; // Simple ID for the batch
+		var allMessages = thread.getMessages(); // result is oldest to newest
+		var msgCount = allMessages.length;
 
-		// Clean up body
-		var rawBody = message.getPlainBody();
+		if (msgCount === 0) continue; // Should not happen
+
+		var lastMsg = allMessages[msgCount - 1]; // The latest message
+		var msgId = "msg_" + i;
+
+		// --- BUILD HISTORY CONTEXT ---
+		// We want to see what happened before this latest message.
+		// Let's grab up to 2 previous messages.
+		var historyBody = "";
+		if (msgCount > 1) {
+			// Start from the message before the last one, go back up to 2 steps
+			var historyLimit = Math.max(0, msgCount - 3);
+			for (var h = msgCount - 2; h >= historyLimit; h--) {
+				var histMsg = allMessages[h];
+				var histFrom = histMsg.getFrom();
+				var histBodyShort = histMsg.getPlainBody().substring(0, 800)
+					.replace(/\n\s*\n/g, '\n'); // condense
+
+				historyBody = `\n--- PREVIOUS MESSAGE (From: ${histFrom}) ---\n${histBodyShort}` + historyBody;
+			}
+		}
+
+		// --- PROCESS LATEST MESSAGE ---
+		var rawBody = lastMsg.getPlainBody();
+
+		// Clean the latest message body
 		var cleanBody = rawBody.replace(/On .* wrote:[\s\S]*$/, '')
 			.replace(/^>.*$/gm, '')
 			.replace(/From:.*[\s\S]*?Subject:.*/, '')
 			.replace(/\n\s*\n/g, '\n')
-			.substring(0, 2000);
+			.trim()
+			.substring(0, 3000); // Give latest message more space
+
+		// --- COMBINE FOR GEMINI ---
+		// Explicitly label the parts so Gemini understands the timeline
+		var fullContextBody = `[LATEST MESSAGE]\n${cleanBody}`;
+
+		if (historyBody) {
+			fullContextBody += `\n\n[THREAD HISTORY]${historyBody}`;
+		}
 
 		emailBatch.push({
 			id: msgId,
-			from: message.getFrom(),
-			subject: message.getSubject(),
-			body: cleanBody
+			from: lastMsg.getFrom(),
+			subject: lastMsg.getSubject(),
+			body: fullContextBody
 		});
 
-		threadMap[msgId] = { thread: thread, message: message };
+		threadMap[msgId] = { thread: thread, message: lastMsg };
 	}
 
 	// 4. Call Gemini (One API Call)
