@@ -61,7 +61,6 @@ var CONFIG = {
 	],
 
 	// ---------------- PROMPTS ----------------
-	// ---------------- PROMPTS ----------------
 	SYSTEM_PROMPT: `
     You are an executive email triage assistant. Your goal is to review incoming mail and decide multiple independent actions based on the user's "Active Context" (what they have been working on recently).
 
