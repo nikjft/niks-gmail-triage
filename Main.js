@@ -15,11 +15,22 @@ function processIncomingMail() {
 	// 1. Get Context (Fast, should be cached)
 	var activeContext = buildActiveContext(false);
 
+	// Capture start time for next run (seconds)
+	var runTimestamp = Math.floor(Date.now() / 1000);
+
+	// Get last run time (default to 24h ago if missing)
+	var scriptProperties = PropertiesService.getScriptProperties();
+	var lastRunTimestamp = scriptProperties.getProperty('LAST_PROCESSED_TIMESTAMP');
+	if (!lastRunTimestamp) {
+		lastRunTimestamp = Math.floor((Date.now() - 24 * 60 * 60 * 1000) / 1000);
+	}
+	Logger.log(`Processing emails since: ${lastRunTimestamp} (Epoch)`);
+
 	// 2. Fetch Unread Emails from all Configured Sources
 	var allThreads = [];
 
 	CONFIG.SOURCE_LABELS.forEach(query => {
-		var fullQuery = `${query} newer_than:${CONFIG.MAX_EMAIL_LOOKBACK_DAYS}d`;
+		var fullQuery = `${query} after:${lastRunTimestamp}`;
 		Logger.log(`Searching: ${fullQuery}`);
 		var threads = GmailApp.search(fullQuery, 0, CONFIG.MAX_EMAILS_TO_PROCESS);
 		allThreads = allThreads.concat(threads);
@@ -134,8 +145,6 @@ function processIncomingMail() {
 				thread.addLabel(label);
 			};
 
-			// ALWAYS apply "ai_processed" so we don't look at it again
-			applyLabel(CONFIG.LABELS.PROCESSED);
 
 			switch (decision.importance) {
 				case "ARCHIVE":
@@ -189,6 +198,10 @@ function processIncomingMail() {
 			Logger.log(`Error executing action for ${msgId}: ${e.toString()}`);
 		}
 	}
+
+	// Save timestamp for next run
+	scriptProperties.setProperty('LAST_PROCESSED_TIMESTAMP', runTimestamp.toString());
+	Logger.log(`Updated LAST_PROCESSED_TIMESTAMP to: ${runTimestamp}`);
 }
 
 // Helper: Call Generic Webhook

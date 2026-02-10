@@ -27,8 +27,8 @@ var CONFIG = {
 	// Search queries to find emails to triage
 	// UPDATED: Exclude already processed emails to save tokens
 	SOURCE_LABELS: [
-		'is:unread in:inbox -label:ai_processed',
-		'is:unread label:@SaneLater -label:ai_processed'
+		'is:unread in:inbox',
+		'is:unread label:@SaneLater'
 	],
 
 	// Labels to apply based on outcome
@@ -38,8 +38,7 @@ var CONFIG = {
 		NOTIFY: "ai_notify",
 		ARCHIVE: "ai_archive",
 		BLOCK: "ai_block",
-		UNSURE: "ai_unsure",
-		PROCESSED: "ai_processed" // Applied to ALL processed emails
+		UNSURE: "ai_unsure"
 	},
 
 	// ---------------- CONTEXT SOURCES ----------------
