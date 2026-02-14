@@ -120,7 +120,14 @@ function processIncomingMail() {
 
 	// 4. CALL STAGE 1 (Triage)
 	// Uses the lightweight context and lightweight model
-	var triageDecisions = callGeminiStage1Triage(stage1Batch, contextObj.triageContext);
+	var triageDecisions = {};
+	try {
+		triageDecisions = callGeminiStage1Triage(stage1Batch, contextObj.triageContext);
+	} catch (e) {
+		Logger.log("CRITICAL ERROR in Stage 1 Triage: " + e.toString());
+		Logger.log("Aborting run to prevent skipping emails. Timestamp will NOT be updated.");
+		return;
+	}
 
 	if (!triageDecisions) {
 		Logger.log("Failed to get Stage 1 decisions.");
@@ -202,7 +209,14 @@ function processIncomingMail() {
 	if (draftCandidates.length > 0) {
 		Logger.log(`Running Stage 2 Drafting for ${draftCandidates.length} emails...`);
 
-		var draftDecisions = callGeminiStage2Draft(draftCandidates, contextObj.draftingContext); // FULL CONTEXT
+		var draftDecisions = {};
+		try {
+			draftDecisions = callGeminiStage2Draft(draftCandidates, contextObj.draftingContext); // FULL CONTEXT
+		} catch (e) {
+			Logger.log("CRITICAL ERROR in Stage 2 Drafting: " + e.toString());
+			Logger.log("Aborting run to ensure drafts are retried. Timestamp will NOT be updated.");
+			return;
+		}
 
 		if (draftDecisions) {
 			for (var msgId in draftDecisions) {
@@ -211,7 +225,13 @@ function processIncomingMail() {
 
 				if (draftResult && draftResult.draft_text && threadObj) {
 					try {
-						threadObj.thread.createDraftReplyAll(draftResult.draft_text);
+						// Construct HTML Body with Quoted History
+						var htmlBody = constructQuotedReply(threadObj.message, draftResult.draft_text);
+
+						// Create Draft with HTML support
+						threadObj.thread.createDraftReplyAll("", {
+							htmlBody: htmlBody
+						});
 						Logger.log(`Draft created for ${msgId}`);
 					} catch (e) {
 						Logger.log(`Error creating draft for ${msgId}: ${e.toString()}`);
@@ -224,6 +244,23 @@ function processIncomingMail() {
 	// Save timestamp for next run
 	scriptProperties.setProperty('LAST_PROCESSED_TIMESTAMP', runTimestamp.toString());
 	Logger.log(`Updated LAST_PROCESSED_TIMESTAMP to: ${runTimestamp}`);
+}
+
+/**
+ * DEBUG/MANUAL TOOL: Force re-processing of recent emails.
+ * Resets the last run timestamp to 24 hours ago and triggers processing.
+ * Useful if you want to re-triage emails from today.
+ */
+function forceProcessRecentMessages() {
+	var scriptProperties = PropertiesService.getScriptProperties();
+	// Set timestamp to 24 hours ago
+	var yesterday = Math.floor((Date.now() - 24 * 60 * 60 * 1000) / 1000);
+	scriptProperties.setProperty('LAST_PROCESSED_TIMESTAMP', yesterday.toString());
+
+	Logger.log("Forced reset of timestamp to " + yesterday + " (24 hours ago).");
+	Logger.log("Triggering processIncomingMail()...");
+
+	processIncomingMail();
 }
 
 // Helper: Call Generic Webhook
@@ -261,17 +298,45 @@ function callWebhook(decision, message) {
 			subject: message.getSubject(),
 			sender: message.getFrom(),
 			geminiOutput: decision,
-			notificationText: notifText
+			timestamp: new Date().toISOString()
 		};
 		options.contentType = 'application/json';
 		options.payload = JSON.stringify(payload);
 	}
 
 	try {
-		Logger.log('Webhook url:' + finalUrl);
-		UrlFetchApp.fetch(finalUrl, options);
-		Logger.log(`Webhook sent (Mode: ${mode}).`);
+		var response = UrlFetchApp.fetch(finalUrl, options);
+		Logger.log(`Webhook Sent: ${response.getResponseCode()}`);
 	} catch (e) {
-		Logger.log("Error sending webhook: " + e.toString());
+		Logger.log(`Webhook Error: ${e.toString()}`);
 	}
+}
+
+/**
+ * Constructs a Gmail-style quoted reply HTML body.
+ * @param {GmailMessage} originalMessage 
+ * @param {String} newDraftText 
+ * @return {String} HTML body with quoted history
+ */
+function constructQuotedReply(originalMessage, newDraftText) {
+	var date = originalMessage.getDate();
+	var from = originalMessage.getFrom();
+	// Format date roughly like Gmail: "On Fri, Feb 14, 2025 at 8:30 AM Name <email> wrote:"
+	var dateStr = Utilities.formatDate(date, Session.getScriptTimeZone(), "EEE, MMM d, yyyy 'at' h:mm a");
+
+	// Clean up newDraftText (convert newlines to <br>)
+	var htmlDraftText = newDraftText.replace(/\n/g, '<br>');
+
+	// Build the HTML
+	var html = `
+    ${htmlDraftText}
+    <br><br>
+    <div class="gmail_quote">
+      On ${dateStr}, ${from} wrote:<br>
+      <blockquote class="gmail_quote" style="margin: 0px 0px 0px 0.8ex; border-left: 1px solid rgb(204, 204, 204); padding-left: 1ex;">
+        ${originalMessage.getBody()} 
+      </blockquote>
+    </div>
+  `;
+	return html;
 }

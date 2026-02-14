@@ -17,6 +17,7 @@ var CONFIG = {
 	// UPDATED: Defaults to 'gemini-3-flash'
 	// ---------------- TUNING ----------------
 	GEMINI_MODEL_TRIAGE: 'gemini-2.5-flash-lite',
+	GEMINI_MODEL_DRAFT: 'gemini-2.5-flash',
 	// ---------------- BATCH OPTIMIZATION ----------------
 	MIN_BATCH_SIZE: 5,         // Wait for 5 emails before running...
 	MAX_WAIT_TIME_MINUTES: 120, // ...unless it's been 2 hours since last run.
@@ -31,8 +32,8 @@ var CONFIG = {
 	// Search queries to find emails to triage
 	// UPDATED: Exclude already processed emails to save tokens
 	SOURCE_LABELS: [
-		'is:unread in:inbox -is:starred',
-		'is:unread label:@SaneLater -is:starred'
+		'is:unread in:inbox',
+		'is:unread label:@SaneLater'
 	],
 
 	// Labels to apply based on outcome
@@ -60,11 +61,7 @@ var CONFIG = {
 		'harvest.com',
 		'gong.io',
 		'fathom.video',
-		'zoom.us',
 		'slack.com'
-	],
+	]
 
-	// ---------------- PROMPTS ----------------
-	// ---------------- PROMPTS ----------------
-	// Now imported from PROMPTS.js through PROMPTS global object
 };

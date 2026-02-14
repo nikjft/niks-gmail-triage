@@ -25,21 +25,25 @@ A "vibe coded" Google Apps Script that uses Google's Gemini AI to triage your in
     -   `ContextBuilder.js`
     -   `GeminiOrchestrator.js`
     -   `Main.js`
-    -   `Setup.js`
+    -   `Prompts.js`
 
-### 2. Configure Environment Variables
-1.  Open `Setup.js`.
-2.  Enter your **Gemini API Key** (get one from [aistudio.google.com](https://aistudio.google.com/)).
-3.  (Optional) Enter a **Webhook URL** for notifications.
-4.  Run the function `setupEnvironmentVariables()` **once**. This saves your keys to the secure "Script Properties" store.
-    -   *Note: If you leave a field blank or wrapped in `[]` (like `[YOUR_KEY]`), the script will skip updating that value, preserving existing settings.*
+### 2. Configure Environment Variables (Script Properties)
+The script uses **Script Properties** to securely store your API keys. Using files like `Setup.js` is deprecated.
 
-### 3. Customize `Config.js`
-Open `Config.js` and tweak:
--   **`SOURCE_LABELS`**: The Gmail search queries to find emails to triage (default: `is:unread in:inbox`).
--   **`LABELS`**: The label names the AI will apply (e.g., `ai_star`, `ai_draft`).
--   **`MAX_EMAIL_LOOKBACK_DAYS`**: How far back to check for new mail (default: 3 days).
--   **`SYSTEM_PROMPT`**: The core personality and rules for the AI.
+1.  In the Apps Script Editor, click the **Project Settings** (gear icon) in the left sidebar.
+2.  Scroll down to **Script Properties** and click **Edit script properties**.
+3.  Add the following properties:
+    -   `GEMINI_API_KEY`: Your API key from [aistudio.google.com](https://aistudio.google.com/).
+    -   `WEBHOOK_URL` (Optional): A webhook URL for urgent notifications.
+
+### 3. Customize Configuration
+-   **`Config.js`**:
+    -   Update `SOURCE_LABELS` to define which emails to check (e.g., `is:unread in:inbox`).
+    -   Adjust `GEMINI_MODEL_TRIAGE` or `GEMINI_MODEL_DRAFT` if you want to use different models.
+    -   Set `ENABLE_DESTRUCTIVE_ACTIONS` to `true` if you trust the AI to Archive/Delete for you (default is `false`).
+-   **`Prompts.js`**:
+    -   Edit `PROMPTS.TRIAGE` to change how the AI prioritizes emails.
+    -   Edit `PROMPTS.DRAFTING` to change the tone/voice of the replies. Uses the "Writing Style Examples" pulled from your sent folder.
 
 ### 4. Test It
 1.  Open `Main.js`.

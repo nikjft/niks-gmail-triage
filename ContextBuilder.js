@@ -13,8 +13,6 @@ function buildActiveContext(forceRefresh) {
 	}
 
 	Logger.log("Building fresh context...");
-	var lookbackDate = new Date();
-	lookbackDate.setDate(lookbackDate.getDate() - CONFIG.LOOKBACK_DAYS);
 
 	// Sets for deduplication
 	var projectContexts = new Set();
@@ -125,9 +123,9 @@ function buildActiveContext(forceRefresh) {
 	}
 
 	if (recentContacts.size > 0) {
-		// Limit contacts to top 20
-		var contactsArr = Array.from(recentContacts).slice(0, 20);
-		contextParts.push("RECENT CONTACTS:\n- " + contactsArr.join("\n- "));
+		// Limit contacts to top 40 to ensure we capture colleagues like potential "Laura Pynn"
+		var contactsArr = Array.from(recentContacts).slice(0, 40);
+		contextParts.push("RECENT CONTACTS (VIPs / Colleagues):\n- " + contactsArr.join("\n- "));
 	}
 
 	var coreContext = contextParts.join("\n\n");

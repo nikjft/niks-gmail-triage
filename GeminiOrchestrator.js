@@ -105,8 +105,10 @@ function callGeminiApi(apiUrl, payload) {
 		var responseText = response.getContentText();
 
 		if (responseCode !== 200) {
-			Logger.log(`Error calling Gemini API: ${responseCode} - ${responseText}`);
-			return {};
+			var errorMsg = `Error calling Gemini API: ${responseCode} - ${responseText}`;
+			Logger.log(errorMsg);
+			// THROW error so Main.js knows to abort and not save timestamp
+			throw new Error(errorMsg);
 		}
 
 		var json = JSON.parse(responseText);
@@ -137,6 +139,6 @@ function callGeminiApi(apiUrl, payload) {
 		return parsed;
 	} catch (e) {
 		Logger.log("Exception calling Gemini: " + e.toString());
-		return {};
+		throw e; // Re-throw to ensure Main.js handles the abort
 	}
 }
