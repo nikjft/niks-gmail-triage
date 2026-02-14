@@ -15,6 +15,7 @@ function callGeminiTriageBatch(emailBatch, activeContext) {
     EMAIL #${index} (ID: ${email.id}):
     From: ${email.from}
     Subject: ${email.subject}
+    Labels: ${email.labels ? email.labels.join(', ') : "(None)"}
     Body: ${email.body}
     --------------------------------------------------`;
 	}).join("\n");
@@ -22,6 +23,10 @@ function callGeminiTriageBatch(emailBatch, activeContext) {
 	var userPrompt = `
     ACTIVE CONTEXT (What is important to me right now):
     ${activeContext}
+
+    USER CONFIGURATION:
+    - HIGH PRIORITY LABELS: ${JSON.stringify(CONFIG.PRIORITY_LABELS.HIGH)}
+    - LOW PRIORITY LABELS: ${JSON.stringify(CONFIG.PRIORITY_LABELS.LOW)}
 
     INCOMING EMAILS TO TRIAGE (${emailBatch.length} items):
     ${emailListString}

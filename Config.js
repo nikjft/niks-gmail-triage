@@ -41,6 +41,13 @@ var CONFIG = {
 		UNSURE: "ai_unsure"
 	},
 
+	// ---------------- PRIORITY DEFINITIONS ----------------
+	// Labels that indicate high or low priority
+	PRIORITY_LABELS: {
+		HIGH: ['High Priority', 'Urgent', 'VIP'], // Example labels
+		LOW: ['kinda-spam', 'Newsletters']
+	},
+
 	// ---------------- CONTEXT SOURCES ----------------
 	TRELLO_LABEL: scriptProperties.getProperty('TRELLO_LABEL') || 'label:_🔜-Trello',
 	MAX_HISTORY_DAYS: 14, // How far back to look for context
@@ -86,6 +93,7 @@ var CONFIG = {
 	- Tone that may represent dissatisfaction, anger, frustration
 	- Time sensitive requests for information or action
 	- Requests for digital signatures (star, do not reply)
+	- System Labels: Check the "Labels" field. If it contains any HIGH PRIORITY labels (configured by user), treat as STAR or NOTIFY.
 
     VOICE & TONE GUIDELINES (CRITICAL for DRAFT_REPLY):
     - MIMIC THE USER: Use the provided "Writing Style Examples" as your guide. 

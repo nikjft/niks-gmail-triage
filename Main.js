@@ -112,7 +112,8 @@ function processIncomingMail() {
 			id: msgId,
 			from: lastMsg.getFrom(),
 			subject: lastMsg.getSubject(),
-			body: fullContextBody
+			body: fullContextBody,
+			labels: thread.getLabels().map(l => l.getName()) // NEW: Pass labels
 		});
 
 		threadMap[msgId] = { thread: thread, message: lastMsg };

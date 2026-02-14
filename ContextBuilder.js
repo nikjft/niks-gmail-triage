@@ -14,26 +14,26 @@ function buildActiveContext(forceRefresh) {
 	Logger.log("Building fresh context...");
 	var lookbackDate = new Date();
 	lookbackDate.setDate(lookbackDate.getDate() - CONFIG.LOOKBACK_DAYS);
-	var dateStr = Utilities.formatDate(lookbackDate, Session.getScriptTimeZone(), "yyyy/MM/dd");
 
-	var contextList = [];
+	// Sets for deduplication
+	var projectContexts = new Set();
+	var recentSubjects = new Set();
+	var recentContacts = new Set();
+	var styleExamples = [];
 
 	// --- SOURCE 1: TRELLO BOARDS ---
 	// Looks for subject lines like "... on [Board Name] -" or "... on [Board Name] via..."
 	var trelloThreads = GmailApp.search(`${CONFIG.TRELLO_LABEL} newer_than:14d`);
-	var trelloSubjects = [];
 
 	trelloThreads.forEach(t => {
 		var subject = t.getFirstMessageSubject();
 		// Regex to extract Board Name between " on " and " - " or " via "
 		var match = subject.match(/ on (.*?) (?:-|via)/);
-		if (match && match[1]) trelloSubjects.push("Active Project/Client: " + match[1].trim());
+		if (match && match[1]) projectContexts.add("Active Project: " + match[1].trim());
 	});
 
 	// --- SOURCE 2: SENT EMAILS (Who are you talking to? + Style Examples) ---
 	var sentThreads = GmailApp.search(`from:me newer_than:14d`);
-	var sentContext = [];
-	var styleExamples = [];
 	var myEmail = Session.getActiveUser().getEmail();
 
 	sentThreads.forEach((t, i) => {
@@ -47,17 +47,29 @@ function buildActiveContext(forceRefresh) {
 			}
 		}
 
-		if (!lastMsg) return; // Should not happen given the search query, but safe to check
+		if (!lastMsg) return;
 
 		// Get Recipient Domain/Email
 		var to = lastMsg.getTo();
 		if (!isExcluded(to)) {
-			sentContext.push(`Recently emailed: ${cleanSubject(t.getFirstMessageSubject())} (To: ${to})`);
+			// Add to distinct lists
+			var cleanSub = cleanSubject(t.getFirstMessageSubject());
+			if (cleanSub) recentSubjects.add(cleanSub);
+
+			// Extract just the email addresses or names from the 'To' field
+			// Simple extraction: split by comma, clean up
+			to.split(',').forEach(recipient => {
+				var cleanRecipient = recipient.trim();
+				if (cleanRecipient && !isExcluded(cleanRecipient)) {
+					recentContacts.add(cleanRecipient);
+				}
+			});
 
 			// Capture up to 3 writing samples for style matching
-			if (styleExamples.length < 3) {
+			// Filter out calendar invites from style examples
+			if (styleExamples.length < 3 && !isCalendarInvite(t.getFirstMessageSubject(), lastMsg.getPlainBody())) {
 				var body = lastMsg.getPlainBody();
-				var subject = lastMsg.getSubject(); // Capture subject too
+				var subject = lastMsg.getSubject();
 
 				// Remove quoted headers like "On ... wrote:" and forward info
 				var cleanBody = body.replace(/On .* wrote:[\s\S]*$/, '')
@@ -77,57 +89,92 @@ function buildActiveContext(forceRefresh) {
 
 	// --- SOURCE 3: STARRED EMAILS ---
 	var starredThreads = GmailApp.search(`is:starred newer_than:14d`);
-	var starredContext = [];
 
 	starredThreads.forEach(t => {
-		starredContext.push(`Starred Priority: ${cleanSubject(t.getFirstMessageSubject())}`);
+		var cleanSub = cleanSubject(t.getFirstMessageSubject());
+		if (cleanSub) recentSubjects.add(cleanSub + " (Starred)");
 	});
 
-	// --- DEDUPLICATE AND MERGE ---
-	// Add Style Examples as a distinct block at the top or bottom
+	// --- BUILD FINAL STRING ---
+
 	var styleSection = "";
 	if (styleExamples.length > 0) {
 		styleSection = "MY WRITING STYLE / VOICE EXAMPLES (Mimic this tone):\n" + styleExamples.join("\n---\n") + "\n\n";
 	}
 
-	var allItems = [...trelloSubjects, ...sentContext, ...starredContext];
-	var uniqueItems = [...new Set(allItems)]; // JavaScript Set deduplicates automatically
+	var contextParts = [];
 
-	Logger.log(`Built context with ${uniqueItems.length} items.`);
-
-	// Truncate based on character count estimate (approx 4 chars per token)
-	// Gemini 1.5 Flash has a huge context window, but for latency and cost, let's keep it reasonable.
-	// 50,000 characters is plenty for triage context.
-	const MAX_CONTEXT_CHARS = 50000;
-	let currentChars = styleSection.length; // Count style section first
-	let limitedContext = [];
-
-	for (const item of uniqueItems) {
-		if (currentChars + item.length > MAX_CONTEXT_CHARS) {
-			break;
-		}
-		limitedContext.push(item);
-		currentChars += item.length + 1; // +1 for newline
+	if (projectContexts.size > 0) {
+		contextParts.push("ACTIVE PROJECTS:\n- " + Array.from(projectContexts).join("\n- "));
 	}
 
-	var finalContext = styleSection + "RECENT ACTIVITY CONTEXT:\n" + limitedContext.join("\n");
+	if (recentSubjects.size > 0) {
+		// Limit recent subjects to top 30 to save space
+		var subjectsArr = Array.from(recentSubjects).slice(0, 30);
+		contextParts.push("RECENT EMAIL SUBJECTS:\n- " + subjectsArr.join("\n- "));
+	}
 
-	// Cache for 25 minutes (1500 seconds) to cover the 20m trigger gap
+	if (recentContacts.size > 0) {
+		// Limit contacts to top 20
+		var contactsArr = Array.from(recentContacts).slice(0, 20);
+		contextParts.push("RECENT CONTACTS:\n- " + contactsArr.join("\n- "));
+	}
+
+	var combinedContext = contextParts.join("\n\n");
+
+	// Truncate based on character count estimate
+	const MAX_CONTEXT_CHARS = 50000;
+	if ((styleSection.length + combinedContext.length) > MAX_CONTEXT_CHARS) {
+		combinedContext = combinedContext.substring(0, MAX_CONTEXT_CHARS - styleSection.length - 100) + "...(truncated)";
+	}
+
+	var finalContext = styleSection + combinedContext;
+
+	// Cache for 25 minutes
 	try {
 		cache.put("active_context", finalContext, 1500);
 	} catch (e) {
-		Logger.log("Failed to cache context (likely too large): " + e.toString());
+		Logger.log("Failed to cache context: " + e.toString());
 	}
 
 	return finalContext;
 }
 
-// Helper: Clean subject lines (remove Re:, Fwd:)
+// Helper: Check for calendar invite indicators
+function isCalendarInvite(subject, body) {
+	var s = subject.toLowerCase();
+	if (s.includes('invitation:') || s.includes('accepted:') || s.includes('declined:') || s.includes('canceled event:') || s.includes('updated invitation:') || s.includes('synced invitation:')) {
+		return true;
+	}
+	// Check body for common calendar artifacts
+	if (body.includes('invite.ics') || body.includes('google.com/calendar/event') || body.includes('View all guest info')) {
+		return true;
+	}
+	return false;
+}
+
+// Helper: Clean subject lines comprehensively
 function cleanSubject(subject) {
-	return subject.replace(/^(re:|fwd:|fw:|sand:)\s*/i, '').trim();
+	if (!subject) return "";
+	// Remove common prefixes iteratively
+	var cleaned = subject;
+	var iterations = 0;
+	// Regex matches Re:, Fwd:, Invitation:, Accepted:, Declined:, Updated invitation:, Canceled event:, Synced invitation:, [External]
+	var prefixRegex = /^\s*(?:re:|fwd:|fw:|sand:|invitation:|accepted:|declined:|updated invitation:|canceled event:|synced invitation:|\[external\])\s*/i;
+
+	while (prefixRegex.test(cleaned) && iterations < 5) {
+		cleaned = cleaned.replace(prefixRegex, '');
+		iterations++;
+	}
+
+	// Remove " @ [Time]" often found in calendar invites if any remain
+	cleaned = cleaned.replace(/\s@\s\w{3}\s\w{3}\s\d{1,2},.*$/, '');
+
+	return cleaned.trim();
 }
 
 // Helper: Check exclusions
 function isExcluded(emailString) {
-	return CONFIG.EXCLUDED_DOMAINS.some(domain => emailString.includes(domain));
+	if (!emailString) return true;
+	return CONFIG.EXCLUDED_DOMAINS.some(domain => emailString.toLowerCase().includes(domain.toLowerCase()));
 }
