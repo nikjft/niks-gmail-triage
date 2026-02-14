@@ -35,7 +35,7 @@ function callGeminiStage1Triage(emailBatch, triageContext) {
 
 	var payload = {
 		"contents": [{
-			"parts": [{ "text": CONFIG.TRIAGE_PROMPT + "\n\n" + userPrompt }]
+			"parts": [{ "text": PROMPTS.TRIAGE + "\n\n" + userPrompt }]
 		}],
 		"generationConfig": {
 			"response_mime_type": "application/json"
@@ -77,7 +77,7 @@ function callGeminiStage2Draft(emailBatch, draftingContext) {
 
 	var payload = {
 		"contents": [{
-			"parts": [{ "text": CONFIG.DRAFTING_PROMPT + "\n\n" + userPrompt }]
+			"parts": [{ "text": PROMPTS.DRAFTING + "\n\n" + userPrompt }]
 		}],
 		"generationConfig": {
 			"response_mime_type": "application/json"
