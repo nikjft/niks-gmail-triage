@@ -125,4 +125,3 @@ function testThreadLogic() {
 	else console.log("PASS: History (Msg 2) found.");
 }
 
-testThreadLogic();

@@ -1,13 +1,14 @@
 /**
- * Calls Gemini with a batch of emails.
- * @param {Array} emailBatch Array of Objects {id, from, subject, body}
- * @param {String} activeContext
- * @returns {Object} Map of email ID to Decision Object
+ * STAGE 1: TRIAGE
+ * Calls Gemini with a batch of emails for classification.
+ * @param {Array} emailBatch Array of Objects {id, from, subject, body} (Body is truncated)
+ * @param {String} triageContext
+ * @returns {Object} Map of email ID to Decision Object { importance, draft_reply, notify, reason }
  */
-function callGeminiTriageBatch(emailBatch, activeContext) {
+function callGeminiStage1Triage(emailBatch, triageContext) {
 	if (!emailBatch || emailBatch.length === 0) return {};
 
-	var apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+	var apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL_TRIAGE}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
 
 	// Construct a batch prompt
 	var emailListString = emailBatch.map((email, index) => {
@@ -15,18 +16,13 @@ function callGeminiTriageBatch(emailBatch, activeContext) {
     EMAIL #${index} (ID: ${email.id}):
     From: ${email.from}
     Subject: ${email.subject}
-    Labels: ${email.labels ? email.labels.join(', ') : "(None)"}
-    Body: ${email.body}
+    Body Preview: ${email.body}
     --------------------------------------------------`;
 	}).join("\n");
 
 	var userPrompt = `
-    ACTIVE CONTEXT (What is important to me right now):
-    ${activeContext}
-
-    USER CONFIGURATION:
-    - HIGH PRIORITY LABELS: ${JSON.stringify(CONFIG.PRIORITY_LABELS.HIGH)}
-    - LOW PRIORITY LABELS: ${JSON.stringify(CONFIG.PRIORITY_LABELS.LOW)}
+    ACTIVE CONTEXT (Projects & Contacts):
+    ${triageContext}
 
     INCOMING EMAILS TO TRIAGE (${emailBatch.length} items):
     ${emailListString}
@@ -39,13 +35,63 @@ function callGeminiTriageBatch(emailBatch, activeContext) {
 
 	var payload = {
 		"contents": [{
-			"parts": [{ "text": CONFIG.SYSTEM_PROMPT + "\n\n" + userPrompt }]
+			"parts": [{ "text": CONFIG.TRIAGE_PROMPT + "\n\n" + userPrompt }]
 		}],
 		"generationConfig": {
 			"response_mime_type": "application/json"
 		}
 	};
 
+	return callGeminiApi(apiUrl, payload);
+}
+
+/**
+ * STAGE 2: DRAFTING
+ * Calls Gemini to draft replies for specific emails.
+ * @param {Array} emailBatch Array of Objects {id, from, subject, body} (FULL Body)
+ * @param {String} draftingContext
+ * @returns {Object} Map of email ID to { draft_text, reason }
+ */
+function callGeminiStage2Draft(emailBatch, draftingContext) {
+	if (!emailBatch || emailBatch.length === 0) return {};
+
+	var apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL_DRAFT}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+
+	var emailListString = emailBatch.map((email, index) => {
+		return `
+    EMAIL (ID: ${email.id}):
+    From: ${email.from}
+    Subject: ${email.subject}
+    Body:
+    ${email.body}
+    --------------------------------------------------`;
+	}).join("\n");
+
+	var userPrompt = `
+    ACTIVE CONTEXT (Style & History):
+    ${draftingContext}
+
+    EMAILS TO DRAFT (${emailBatch.length} items):
+    ${emailListString}
+  `;
+
+	var payload = {
+		"contents": [{
+			"parts": [{ "text": CONFIG.DRAFTING_PROMPT + "\n\n" + userPrompt }]
+		}],
+		"generationConfig": {
+			"response_mime_type": "application/json"
+		}
+	};
+
+	return callGeminiApi(apiUrl, payload);
+}
+
+
+/**
+ * Helper: Generic Gemini API Call
+ */
+function callGeminiApi(apiUrl, payload) {
 	var options = {
 		"method": "post",
 		"contentType": "application/json",
@@ -57,7 +103,6 @@ function callGeminiTriageBatch(emailBatch, activeContext) {
 		var response = UrlFetchApp.fetch(apiUrl, options);
 		var responseCode = response.getResponseCode();
 		var responseText = response.getContentText();
-		Logger.log("Gemini Raw Response: " + responseText); // DEBUG
 
 		if (responseCode !== 200) {
 			Logger.log(`Error calling Gemini API: ${responseCode} - ${responseText}`);
@@ -72,15 +117,13 @@ function callGeminiTriageBatch(emailBatch, activeContext) {
 		}
 
 		var contentText = json.candidates[0].content.parts[0].text;
-		Logger.log("Gemini Content Text: " + contentText); // DEBUG
 
-		// Cleanup: Remove markdown code fencing if present
+		// Cleanup: Remove markdown code fencing
 		contentText = contentText.replace(/^```json\n/, '').replace(/\n```$/, '').trim();
 
 		var parsed = JSON.parse(contentText);
 
-		// FIX: Gemini sometimes returns an Array of Objects [ {"msg_0": {}}, {"msg_1": {}} ]
-		// We need to flatten this into a single Map { "msg_0": {}, "msg_1": {} }
+		// Flatten Array if necessary
 		if (Array.isArray(parsed)) {
 			var flatMap = {};
 			parsed.forEach(item => {
@@ -91,7 +134,7 @@ function callGeminiTriageBatch(emailBatch, activeContext) {
 			return flatMap;
 		}
 
-		return parsed; // Return the structured JSON map
+		return parsed;
 	} catch (e) {
 		Logger.log("Exception calling Gemini: " + e.toString());
 		return {};

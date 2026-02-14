@@ -13,7 +13,8 @@ function refreshContextCache() {
  */
 function processIncomingMail() {
 	// 1. Get Context (Fast, should be cached)
-	var activeContext = buildActiveContext(false);
+	var contextObj = buildActiveContext(false);
+	// Fallback if old cache string exists (unlikely but safe) (Actually ContextBuilder handles parsing)
 
 	// Capture start time for next run (seconds)
 	var runTimestamp = Math.floor(Date.now() / 1000);
@@ -36,7 +37,7 @@ function processIncomingMail() {
 		allThreads = allThreads.concat(threads);
 	});
 
-	// Deduplicate threads (in case labels overlap)
+	// Deduplicate threads
 	var threadIds = new Set();
 	var uniqueThreads = [];
 	allThreads.forEach(t => {
@@ -51,45 +52,27 @@ function processIncomingMail() {
 		return;
 	}
 
-	// Double check max limit after merging
+	// Limit processing
 	if (uniqueThreads.length > CONFIG.MAX_EMAILS_TO_PROCESS) {
 		uniqueThreads = uniqueThreads.slice(0, CONFIG.MAX_EMAILS_TO_PROCESS);
 	}
 
 	Logger.log(`Processing ${uniqueThreads.length} threads...`);
 
-	// 3. Prepare Batch
-	var emailBatch = [];
-	var threadMap = {}; // Map ID -> Thread Object
+	// 3. Prepare STAGE 1 Batch (Lightweight)
+	var stage1Batch = [];
+	var threadMap = {}; // Map ID -> { thread, lastMsg, fullBody, history }
 
 	for (var i = 0; i < uniqueThreads.length; i++) {
 		var thread = uniqueThreads[i];
-		var allMessages = thread.getMessages(); // result is oldest to newest
+		var allMessages = thread.getMessages();
 		var msgCount = allMessages.length;
+		if (msgCount === 0) continue;
 
-		if (msgCount === 0) continue; // Should not happen
-
-		var lastMsg = allMessages[msgCount - 1]; // The latest message
+		var lastMsg = allMessages[msgCount - 1];
 		var msgId = "msg_" + i;
 
-		// --- BUILD HISTORY CONTEXT ---
-		// We want to see what happened before this latest message.
-		// Let's grab up to 2 previous messages.
-		var historyBody = "";
-		if (msgCount > 1) {
-			// Start from the message before the last one, go back up to 2 steps
-			var historyLimit = Math.max(0, msgCount - 3);
-			for (var h = msgCount - 2; h >= historyLimit; h--) {
-				var histMsg = allMessages[h];
-				var histFrom = histMsg.getFrom();
-				var histBodyShort = histMsg.getPlainBody().substring(0, 800)
-					.replace(/\n\s*\n/g, '\n'); // condense
-
-				historyBody = `\n--- PREVIOUS MESSAGE (From: ${histFrom}) ---\n${histBodyShort}` + historyBody;
-			}
-		}
-
-		// --- PROCESS LATEST MESSAGE ---
+		// --- PREPARE FULL CONTENT (Processed once for efficiency) ---
 		var rawBody = lastMsg.getPlainBody();
 
 		// Clean the latest message body
@@ -97,67 +80,83 @@ function processIncomingMail() {
 			.replace(/^>.*$/gm, '')
 			.replace(/From:.*[\s\S]*?Subject:.*/, '')
 			.replace(/\n\s*\n/g, '\n')
-			.trim()
-			.substring(0, 3000); // Give latest message more space
+			.trim();
 
-		// --- COMBINE FOR GEMINI ---
-		// Explicitly label the parts so Gemini understands the timeline
-		var fullContextBody = `[LATEST MESSAGE]\n${cleanBody}`;
+		// Truncate for Stage 1 Preview (500 chars)
+		var previewBody = cleanBody.substring(0, 500);
 
+		// Prepare History for potential Stage 2
+		var historyBody = "";
+		if (msgCount > 1) {
+			var historyLimit = Math.max(0, msgCount - 3);
+			for (var h = msgCount - 2; h >= historyLimit; h--) {
+				var histMsg = allMessages[h];
+				var histBodyShort = histMsg.getPlainBody().substring(0, 800)
+					.replace(/\n\s*\n/g, '\n');
+				historyBody = `\n--- PREVIOUS MESSAGE (From: ${histMsg.getFrom()}) ---\n${histBodyShort}` + historyBody;
+			}
+		}
+
+		// Full body for Stage 2
+		var fullContextBody = `[LATEST MESSAGE]\n${cleanBody.substring(0, 3000)}`;
 		if (historyBody) {
 			fullContextBody += `\n\n[THREAD HISTORY]${historyBody}`;
 		}
 
-		emailBatch.push({
+		stage1Batch.push({
 			id: msgId,
 			from: lastMsg.getFrom(),
 			subject: lastMsg.getSubject(),
-			body: fullContextBody,
-			labels: thread.getLabels().map(l => l.getName()) // NEW: Pass labels
+			body: previewBody, // LIGHTWEIGHT
+			labels: thread.getLabels().map(l => l.getName())
 		});
 
-		threadMap[msgId] = { thread: thread, message: lastMsg };
+		threadMap[msgId] = {
+			thread: thread,
+			message: lastMsg,
+			fullBody: fullContextBody
+		};
 	}
 
-	// 4. Call Gemini (One API Call)
-	var decisionMap = callGeminiTriageBatch(emailBatch, activeContext);
+	// 4. CALL STAGE 1 (Triage)
+	// Uses the lightweight context and lightweight model
+	var triageDecisions = callGeminiStage1Triage(stage1Batch, contextObj.triageContext);
 
-	if (!decisionMap) {
-		Logger.log("Failed to get batch decisions.");
+	if (!triageDecisions) {
+		Logger.log("Failed to get Stage 1 decisions.");
 		return;
 	}
 
-	// 5. Execute Actions
-	for (var msgId in decisionMap) {
-		var decision = decisionMap[msgId];
+	// 5. Execute Triage Actions & Identify Draft Candidates
+	var draftCandidates = []; // Array of { id, ... }
+
+	for (var msgId in triageDecisions) {
+		var decision = triageDecisions[msgId];
 		var threadObj = threadMap[msgId];
 
 		if (!threadObj) continue;
 
-		Logger.log(`Decision for ${msgId}: ${decision.importance}`);
+		Logger.log(`Stage 1 Decision for ${msgId}: ${decision.importance}, Draft: ${decision.draft_reply}`);
 
 		var thread = threadObj.thread;
 		var message = threadObj.message;
 
 		try {
-			// Helper to apply label safely
 			var applyLabel = function (labelName) {
 				var label = GmailApp.getUserLabelByName(labelName) || GmailApp.createLabel(labelName);
 				thread.addLabel(label);
 			};
 
-
+			// Apply Importance Labels / Actions
 			switch (decision.importance) {
 				case "ARCHIVE":
 					applyLabel(CONFIG.LABELS.ARCHIVE);
 					if (CONFIG.ENABLE_DESTRUCTIVE_ACTIONS) {
 						thread.markRead();
 						thread.moveToArchive();
-						// If archived/blocked, stop processing this email (no drafts/notifies)
-						continue;
+						continue; // Stop processing this email
 					}
 					break;
-
 				case "BLOCK":
 					applyLabel(CONFIG.LABELS.BLOCK);
 					if (CONFIG.ENABLE_DESTRUCTIVE_ACTIONS) {
@@ -165,38 +164,60 @@ function processIncomingMail() {
 						continue;
 					}
 					break;
-
 				case "STAR":
 					applyLabel(CONFIG.LABELS.STAR);
 					message.star();
 					break;
-
 				case "UNSURE":
 					applyLabel(CONFIG.LABELS.UNSURE);
 					break;
-
-				case "NEITHER":
-					// Do nothing specific for importance
-					break;
 			}
 
-			// INDEPENDENT ACTION: Draft Reply
-			if (decision.draft_reply) {
-				applyLabel(CONFIG.LABELS.DRAFT);
-				message.star(); // Suggest keeping starred if replying
-				if (decision.draft_text) {
-					thread.createDraftReplyAll(decision.draft_text);
-				}
-			}
-
-			// INDEPENDENT ACTION: Notify
+			// NOTIFY Check
 			if (decision.notify) {
 				applyLabel(CONFIG.LABELS.NOTIFY);
 				message.star();
 				callWebhook(decision, message);
 			}
+
+			// DRAFT CHECK -> Queue for Stage 2
+			if (decision.draft_reply) {
+				applyLabel(CONFIG.LABELS.DRAFT);
+				message.star(); // Keep starred if replying
+
+				draftCandidates.push({
+					id: msgId,
+					from: message.getFrom(),
+					subject: message.getSubject(),
+					body: threadObj.fullBody // FULL CONTEXT
+				});
+			}
+
 		} catch (e) {
-			Logger.log(`Error executing action for ${msgId}: ${e.toString()}`);
+			Logger.log(`Error processing ${msgId}: ${e.toString()}`);
+		}
+	}
+
+	// 6. CALL STAGE 2 (Drafting) - Only if needed
+	if (draftCandidates.length > 0) {
+		Logger.log(`Running Stage 2 Drafting for ${draftCandidates.length} emails...`);
+
+		var draftDecisions = callGeminiStage2Draft(draftCandidates, contextObj.draftingContext); // FULL CONTEXT
+
+		if (draftDecisions) {
+			for (var msgId in draftDecisions) {
+				var draftResult = draftDecisions[msgId];
+				var threadObj = threadMap[msgId];
+
+				if (draftResult && draftResult.draft_text && threadObj) {
+					try {
+						threadObj.thread.createDraftReplyAll(draftResult.draft_text);
+						Logger.log(`Draft created for ${msgId}`);
+					} catch (e) {
+						Logger.log(`Error creating draft for ${msgId}: ${e.toString()}`);
+					}
+				}
+			}
 		}
 	}
 

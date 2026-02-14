@@ -15,7 +15,11 @@ var CONFIG = {
 
 	// ---------------- TUNING ----------------
 	// UPDATED: Defaults to 'gemini-3-flash'
-	GEMINI_MODEL: scriptProperties.getProperty('GEMINI_MODEL') || 'gemini-3-flash',
+	// ---------------- TUNING ----------------
+	GEMINI_MODEL_TRIAGE: 'gemini-2.5-flash-lite',
+	// ---------------- BATCH OPTIMIZATION ----------------
+	MIN_BATCH_SIZE: 5,         // Wait for 5 emails before running...
+	MAX_WAIT_TIME_MINUTES: 120, // ...unless it's been 2 hours since last run.
 
 	// Safety Flag: If false, actions like ARCHIVE/BLOCK will only label the email.
 	ENABLE_DESTRUCTIVE_ACTIONS: scriptProperties.getProperty('ENABLE_DESTRUCTIVE_ACTIONS') === 'true',
@@ -27,8 +31,8 @@ var CONFIG = {
 	// Search queries to find emails to triage
 	// UPDATED: Exclude already processed emails to save tokens
 	SOURCE_LABELS: [
-		'is:unread in:inbox',
-		'is:unread label:@SaneLater'
+		'is:unread in:inbox -is:starred',
+		'is:unread label:@SaneLater -is:starred'
 	],
 
 	// Labels to apply based on outcome
@@ -39,13 +43,6 @@ var CONFIG = {
 		ARCHIVE: "ai_archive",
 		BLOCK: "ai_block",
 		UNSURE: "ai_unsure"
-	},
-
-	// ---------------- PRIORITY DEFINITIONS ----------------
-	// Labels that indicate high or low priority
-	PRIORITY_LABELS: {
-		HIGH: ['High Priority', 'Urgent', 'VIP'], // Example labels
-		LOW: ['kinda-spam', 'Newsletters']
 	},
 
 	// ---------------- CONTEXT SOURCES ----------------
@@ -68,25 +65,23 @@ var CONFIG = {
 	],
 
 	// ---------------- PROMPTS ----------------
-	SYSTEM_PROMPT: `
-    You are an executive email triage assistant. Your goal is to review incoming mail and decide multiple independent actions based on the user's "Active Context" (what they have been working on recently).
-
+	TRIAGE_PROMPT: `
+    You are an executive email triage assistant. Your goal is to review incoming mail and decide actions.
+    
     ASSESSMENT 1: IMPORTANCE (Pick ONE)
     - ARCHIVE: Low value, newsletters, cold outreach, or irrelevant notifications.
     - BLOCK: Obvious spam or malicious.
-    - STAR: High priority. Needs to be read (or requires offline action).
+    - STAR: High priority. Needs to be read.
     - NEITHER: Normal priority, read later.
     - UNSURE: You are truly uncertain.
 
     ASSESSMENT 2: DRAFT REPLY (Boolean)
-    - Set to TRUE if the email requires a response from me, or a request for status.
-    - PROVIDE DRAFT TEXT if TRUE.
+    - Set to TRUE if the email requests a response from me specifically.
     - IGNORE if Importance is ARCHIVE or BLOCK.
 
     ASSESSMENT 3: NOTIFY (Boolean)
     - Set to TRUE if extremely urgent or time-sensitive.
     - IGNORE if Importance is ARCHIVE or BLOCK.
-	- System Labels: Check the "Labels" field. Messages with HIGH PRIORITY labels should never be blocked.
 
     HIGH PRIORITY INDICATORS:
 	- Related to a sales proposal, discovery meeting, or presentation
@@ -94,9 +89,28 @@ var CONFIG = {
 	- Tone that may represent dissatisfaction, anger, frustration
 	- Time sensitive requests for information or action
 	- Requests for digital signatures (star, do not reply)
-	- Messages with HIGH PRIORITY labels are more likely to be priority but that is just one indicator and should be assessed in context of the message.
 
-    VOICE & TONE GUIDELINES (CRITICAL for DRAFT_REPLY):
+    INPUT DATA:
+    1. Active Contexts: Recent projects and recent contacts.
+    2. Incoming Email: The sender, subject, and preview.
+
+    OUTPUT FORMAT:
+    Return strictly JSON:
+    {
+      "msg_id": {
+        "importance": "ARCHIVE" | "BLOCK" | "STAR" | "NEITHER" | "UNSURE",
+        "draft_reply": true | false,
+        "notify": true | false,
+        "notification_text": "Short alert text if notify is true",
+        "reason": "Short explanation of your decisions"
+      }
+    }
+  `,
+
+	DRAFTING_PROMPT: `
+    You are an executive email triage assistant. Your goal is to DRAFT REPLIES for the provided emails.
+
+    VOICE & TONE GUIDELINES:
     - MIMIC THE USER: Use the provided "Writing Style Examples" as your guide. 
 	- Speak as an executive strategic consultant who balances efficiency with warmth
 	- Write in micro-paragraphs (strictly 1-3 sentences max) separated by white space to ensure immediate scannability. Avoid walls of text.
@@ -110,20 +124,12 @@ var CONFIG = {
     - BE BRIEF: Executives write short, direct emails. No fluff. 8th grade reading level.
     - NO WEIRD FORMATTING: Do not use bold/markdown in the email body unless explicitly necessary.
 
-    INPUT DATA:
-    1. Active Contexts: Recent projects, board names, and *Writing Style Examples*.
-    2. Incoming Email: The sender, subject, and body.
-
     OUTPUT FORMAT:
     Return strictly JSON:
     {
       "msg_id": {
-        "importance": "ARCHIVE" | "BLOCK" | "STAR" | "NEITHER" | "UNSURE",
-        "draft_reply": true | false,
-        "draft_text": "Email body if draft_reply is true",
-        "notify": true | false,
-        "notification_text": "Short alert text if notify is true",
-        "reason": "Short explanation of your decisions"
+        "draft_text": "The draft reply body",
+        "reason": "Reason for the drafted text"
       }
     }
   `

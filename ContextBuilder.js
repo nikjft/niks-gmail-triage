@@ -1,13 +1,14 @@
+
 function buildActiveContext(forceRefresh) {
 	// 1. Check Cache first (unless forcing refresh)
 	var cache = CacheService.getScriptCache();
 
 	if (!forceRefresh) {
-		var cachedContext = cache.get("active_context");
+		var cachedContext = cache.get("active_context_obj");
 
 		if (cachedContext) {
 			Logger.log("Returning cached context.");
-			return cachedContext;
+			return JSON.parse(cachedContext);
 		}
 	}
 
@@ -19,6 +20,8 @@ function buildActiveContext(forceRefresh) {
 	var projectContexts = new Set();
 	var recentSubjects = new Set();
 	var recentContacts = new Set();
+	var rawSubjectCount = 0;
+	var rawContactCount = 0;
 	var styleExamples = [];
 
 	// --- SOURCE 1: TRELLO BOARDS ---
@@ -54,13 +57,17 @@ function buildActiveContext(forceRefresh) {
 		if (!isExcluded(to)) {
 			// Add to distinct lists
 			var cleanSub = cleanSubject(t.getFirstMessageSubject());
-			if (cleanSub) recentSubjects.add(cleanSub);
+			if (cleanSub) {
+				rawSubjectCount++;
+				recentSubjects.add(cleanSub);
+			}
 
 			// Extract just the email addresses or names from the 'To' field
 			// Simple extraction: split by comma, clean up
 			to.split(',').forEach(recipient => {
 				var cleanRecipient = recipient.trim();
 				if (cleanRecipient && !isExcluded(cleanRecipient)) {
+					rawContactCount++;
 					recentContacts.add(cleanRecipient);
 				}
 			});
@@ -92,10 +99,13 @@ function buildActiveContext(forceRefresh) {
 
 	starredThreads.forEach(t => {
 		var cleanSub = cleanSubject(t.getFirstMessageSubject());
-		if (cleanSub) recentSubjects.add(cleanSub + " (Starred)");
+		if (cleanSub) {
+			rawSubjectCount++;
+			recentSubjects.add(cleanSub + " (Starred)");
+		}
 	});
 
-	// --- BUILD FINAL STRING ---
+	// --- BUILD FINAL STRINGS ---
 
 	var styleSection = "";
 	if (styleExamples.length > 0) {
@@ -120,24 +130,45 @@ function buildActiveContext(forceRefresh) {
 		contextParts.push("RECENT CONTACTS:\n- " + contactsArr.join("\n- "));
 	}
 
-	var combinedContext = contextParts.join("\n\n");
+	var coreContext = contextParts.join("\n\n");
+
+	// Triage Context: Core Context only (Projects + Recent Activity)
+	var triageContext = coreContext;
+
+	// Drafting Context: Style + Core Context
+	var draftingContext = styleSection + "RECENT ACTIVITY CONTEXT:\n" + coreContext;
 
 	// Truncate based on character count estimate
 	const MAX_CONTEXT_CHARS = 50000;
-	if ((styleSection.length + combinedContext.length) > MAX_CONTEXT_CHARS) {
-		combinedContext = combinedContext.substring(0, MAX_CONTEXT_CHARS - styleSection.length - 100) + "...(truncated)";
+	if (draftingContext.length > MAX_CONTEXT_CHARS) {
+		draftingContext = draftingContext.substring(0, MAX_CONTEXT_CHARS) + "...(truncated)";
 	}
 
-	var finalContext = styleSection + combinedContext;
+	// --- DETAILED LOGGING ---
+	// --- DETAILED LOGGING ---
+	Logger.log(`
+      CONTEXT BUILD REPORT:
+      - Active Projects: ${projectContexts.size}
+      - Recent Subjects: ${recentSubjects.size} (from ${rawSubjectCount} raw)
+      - Recent Contacts: ${recentContacts.size} (from ${rawContactCount} raw)
+      - Style Examples: ${styleExamples.length}
+      - Triage Context Size: ~${triageContext.length} chars
+      - Drafting Context Size: ~${draftingContext.length} chars
+    `);
+
+	var contextResult = {
+		triageContext: triageContext,
+		draftingContext: draftingContext
+	};
 
 	// Cache for 25 minutes
 	try {
-		cache.put("active_context", finalContext, 1500);
+		cache.put("active_context_obj", JSON.stringify(contextResult), 1500);
 	} catch (e) {
 		Logger.log("Failed to cache context: " + e.toString());
 	}
 
-	return finalContext;
+	return contextResult;
 }
 
 // Helper: Check for calendar invite indicators
@@ -177,4 +208,29 @@ function cleanSubject(subject) {
 function isExcluded(emailString) {
 	if (!emailString) return true;
 	return CONFIG.EXCLUDED_DOMAINS.some(domain => emailString.toLowerCase().includes(domain.toLowerCase()));
+}
+
+/**
+ * DEBUG: Run this function manually to inspect the current cache state.
+ */
+function inspectContextCache() {
+	var cache = CacheService.getScriptCache();
+	var cachedContext = cache.get("active_context_obj");
+
+	if (!cachedContext) {
+		Logger.log("CACHE STATUS: Empty / Expired");
+		return;
+	}
+
+	var ctx = JSON.parse(cachedContext);
+	Logger.log("CACHE STATUS: Found");
+	Logger.log("--------------------------------------------------");
+	Logger.log(`TRIAGE CONTEXT (${ctx.triageContext.length} chars) [First 2000 chars]:\n` + ctx.triageContext.substring(0, 2000) + "\n");
+	Logger.log("--------------------------------------------------");
+	Logger.log(`DRAFTING CONTEXT (${ctx.draftingContext.length} chars) [First 2000 chars]:\n` + ctx.draftingContext.substring(0, 2000) + "\n");
+	Logger.log("--------------------------------------------------");
+}
+
+function forceBuildActiveContext() {
+	buildActiveContext(true);
 }
