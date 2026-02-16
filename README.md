@@ -1,67 +1,92 @@
 # Gmail Triage Agent (Gemini Powered)
 
-A "vibe coded" Google Apps Script that uses Google's Gemini AI to triage your inbox. It mimics your writing style to draft replies, prioritizes emails, and can send webhook notifications for urgent matters.
+A powerful Google Apps Script that leverages Google's Gemini AI to intelligently triage your inbox. Working in two stages—**Triage** and **Drafting**—this agent analyzes your incoming mail, prioritizes urgent matters, and drafts context-aware replies that mimic your personal writing style.
 
-**⚠️ DISCLAIMER: This code was "vibe coded". Use at your own risk. Always verify AI actions before enabling destructive settings.**
+**⚠️ DISCLAIMER: This code was "vibe coded" and uses AI to perform actions on your email. Use at your own risk. Always verify AI actions before enabling destructive settings.**
 
 ## Features
 
--   **Smart Triage**: Categorizes emails into `STAR` (Important), `DRAFT_REPLY` (Needs Response), `ARCHIVE`, `BLOCK`, or `UNSURE`.
--   **Context Aware**: analyzing your recent sent emails and Trello board (optional) to understand what's currently important to you.
--   **Style Mimicry**: analyzing your recent sent emails to match your tone and capitalization style in draft replies.
--   **Safety Mode**: By default, "destructive" actions (Archive/Block) only apply a label (`ai_archive`, `ai_block`) so you can review them.
--   **Non-Exclusive Actions**: An email can be Starred, Drafted, AND trigger a Notification simultaneously.
--   **Batch Processing**: Processes emails in batches to save costs and time.
--   **Timestamp Tracking**: Tracks the last processed time to ensure no new messages in threads are missed.
--   **Webhooks**: Can trigger a generic webhook (e.g., Zapier, Pushover) for urgent notifications.
+-   **Two-Stage Intelligence**: 
+    1.  **Triage**: Rapidly categorizes emails (`STAR`, `DRAFT_REPLY`, `ARCHIVE`, `BLOCK`, `UNSURE`).
+    2.  **Drafting**: Generates sophisticated draft replies for candidates identified in the Triage stage.
+-   **Context Aware**: Analyzes your recent sent emails and Trello board notifications to understand your current projects and VIP contacts.
+-   **Style Mimicry**: Extracts tone and formatting patterns from your sent folder to ensure drafts sound like you.
+-   **Safety First**: "Destructive" actions (Archive/Block) are disabled by default; the AI will only apply labels (`ai_archive`, `ai_block`) for your review.
+-   **Webhook Notifications**: Instantly alerts you via custom webhooks for urgent, time-sensitive emails.
+-   **Batch Efficiency**: Intelligently queues emails to process them in batches, saving API tokens and execution time.
 
 ## Setup Guide
 
-### 1. Create the Script
-1.  Go to [script.google.com](https://script.google.com/).
-2.  Create a new project.
-3.  Copy the contents of the `.js` files in this repo into corresponding files in the Apps Script editor:
+### 1. Create the Google Apps Script Project
+1.  Visit [script.google.com](https://script.google.com/) and create a **New Project**.
+2.  In the Apps Script editor, create files corresponding to the `.js` files in this repository and copy their contents:
     -   `Config.js`
     -   `ContextBuilder.js`
     -   `GeminiOrchestrator.js`
     -   `Main.js`
     -   `Prompts.js`
 
-### 2. Configure Environment Variables (Script Properties)
-The script uses **Script Properties** to securely store your API keys. Using files like `Setup.js` is deprecated.
-
-1.  In the Apps Script Editor, click the **Project Settings** (gear icon) in the left sidebar.
-2.  Scroll down to **Script Properties** and click **Edit script properties**.
-3.  Add the following properties:
-    -   `GEMINI_API_KEY`: Your API key from [aistudio.google.com](https://aistudio.google.com/).
-    -   `WEBHOOK_URL` (Optional): A webhook URL for urgent notifications.
+### 2. Configure Script Properties
+The agent uses **Script Properties** to securely store sensitive data.
+1.  Click the **Project Settings** (gear icon) in the left sidebar.
+2.  Scroll to **Script Properties** and click **Edit script properties**.
+3.  Add the following required and optional properties:
+    -   `GEMINI_API_KEY`: Get your key from [aistudio.google.com](https://aistudio.google.com/).
+    -   `WEBHOOK_URL` (Optional): A URL for push notifications (e.g., Zapier, Pushover).
 
 ### 3. Customize Configuration
--   **`Config.js`**:
-    -   Update `SOURCE_LABELS` to define which emails to check (e.g., `is:unread in:inbox`).
-    -   Adjust `GEMINI_MODEL_TRIAGE` or `GEMINI_MODEL_DRAFT` if you want to use different models.
-    -   Set `ENABLE_DESTRUCTIVE_ACTIONS` to `true` if you trust the AI to Archive/Delete for you (default is `false`).
--   **`Prompts.js`**:
-    -   Edit `PROMPTS.TRIAGE` to change how the AI prioritizes emails.
-    -   Edit `PROMPTS.DRAFTING` to change the tone/voice of the replies. Uses the "Writing Style Examples" pulled from your sent folder.
+Fine-tune the agent's behavior in `Config.js` and `Prompts.js`.
 
-### 4. Test It
-1.  Open `Main.js`.
-2.  Run `processIncomingMail()`.
-3.  Check the "Execution Transcript" log to see what it did.
-4.  Check your Gmail to see the labels applied (`ai_draft`, `ai_star`, etc.).
+#### `Config.js` - Core Settings
+The logic respects the following categories of settings:
 
-### 5. Automate It
-1.  Go to **Triggers** (clock icon) in Apps Script.
-2.  Add a Trigger for `refreshContextCache`:
-    -   Event Source: Time-driven
-    -   Type: Minutes timer -> Every 30 minutes
-3.  Add a Trigger for `processIncomingMail`:
-    -   Event Source: Time-driven
-    -   Type: Minutes timer -> Every 10 minutes (or as frequent as you like).
+- **Sources & Labels**:
+  - `SOURCE_LABELS`: Queries identifying emails to triage (e.g., `is:unread in:inbox`).
+  - `LABELS`: Mapping of outcomes to Gmail labels (e.g., `STAR -> ai_star`).
+- **Context & Exclusions**:
+  - `TRELLO_LABEL`: The Gmail label applied to Trello notifications. The agent extracts board names for project context. Set to `null` to disable.
+  - `EXCLUDED_DOMAINS`: List of domains/emails to ignore for context building (e.g., automation bots).
+- **Safety & Destructive Actions**:
+  - `ENABLE_DESTRUCTIVE_ACTIONS`: Set to `true` to allow the AI to automatically Archive or Trash emails. If `false`, it only applies labels.
+- **Batching (Token Optimization)**:
+  - `MIN_BATCH_SIZE`: Minimum emails required to trigger a run (e.g., `5`).
+  - `MAX_WAIT_TIME_MINUTES`: Force a run if this time has passed, even if the batch isn't full (e.g., `30`).
+  - `MAX_EMAILS_TO_PROCESS`: Hard limit on threads per execution to avoid script timeouts (default: `30`).
+
+#### `Prompts.js` - Personalization
+**CRITICAL**: You must adjust the prompts to match your identity.
+-  `PROMPTS.TRIAGE`: Used in **Stage 1**. Defines the criteria for importance and identifies which emails need a response (`draft_reply`).
+-  `PROMPTS.DRAFTING`: Used in **Stage 2**. Contains instructions for tone, voice, and sign-offs. **Replace "Nik" with your name** and adjust the strategic consultant persona to fit your role.
+
+## Webhook Configuration & Output (Optional)
+
+- **Config.gs settings**:
+  - `WEBHOOK_MODE`: Choose between `JSON` (full data), `TEXT` (short alert), or `URL_PARAM` (GET request).
+  - `WEBHOOK_PARAM_NAME`: The parameter name used for `URL_PARAM` mode (default: `message`).
+
+When an urgent email is identified (`notify: true`), the agent triggers your configured `WEBHOOK_URL`.
+
+### Output Formats:
+- **`JSON` (Default)**:
+  ```json
+  {
+    "messageId": "msg_id",
+    "subject": "Email Subject",
+    "sender": "sender@example.com",
+    "geminiOutput": { "importance": "STAR", "reason": "...", "notification_text": "..." },
+    "timestamp": "2024-02-16T..."
+  }
+  ```
+- **`TEXT`**: A simple string containing the `notification_text` generated by Gemini as text/raw payload.
+- **`URL_PARAM`**: A `GET` request to your URL with the message appended as a query parameter (e.g., `?message=hello%20world...`).
+
+## Schedule to Run Automatically
+
+Set up triggers in the Apps Script dashboard (Clock icon):
+1.  **`refreshContextCache`**: Time-driven -> Minutes timer -> Every 30 minutes. (Keeps your project/style context fresh).
+2.  **`processIncomingMail`**: Time-driven -> Minutes timer -> Every 5 minutes. (The main triage loop). Note that this is limited by batch size, so higher frequency will not incur additional costs.
 
 ## License
-
 MIT License
 
 Copyright (c) 2024
@@ -83,3 +108,4 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+

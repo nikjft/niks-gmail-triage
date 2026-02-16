@@ -52,6 +52,17 @@ function processIncomingMail() {
 		return;
 	}
 
+	// --- BATCHING LOGIC ---
+	var nowSeconds = Math.floor(Date.now() / 1000);
+	var minutesSinceLastRun = (nowSeconds - lastRunTimestamp) / 60;
+	var minBatch = CONFIG.MIN_BATCH_SIZE || 0;
+	var maxWait = CONFIG.MAX_WAIT_TIME_MINUTES || 0;
+
+	if (uniqueThreads.length < minBatch && minutesSinceLastRun < maxWait) {
+		Logger.log(`Batching: Only ${uniqueThreads.length} emails found (min: ${minBatch}), and only ${minutesSinceLastRun.toFixed(1)} minutes since last run (max wait: ${maxWait}). Skipping processing.`);
+		return;
+	}
+
 	// Limit processing
 	if (uniqueThreads.length > CONFIG.MAX_EMAILS_TO_PROCESS) {
 		uniqueThreads = uniqueThreads.slice(0, CONFIG.MAX_EMAILS_TO_PROCESS);
