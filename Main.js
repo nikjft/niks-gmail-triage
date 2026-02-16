@@ -72,49 +72,27 @@ function processIncomingMail() {
 		var lastMsg = allMessages[msgCount - 1];
 		var msgId = "msg_" + i;
 
-		// --- PREPARE FULL CONTENT (Processed once for efficiency) ---
+		// --- PREPARE FULL CONTENT (Optimized) ---
 		var rawBody = lastMsg.getPlainBody();
 
-		// Clean the latest message body
-		var cleanBody = rawBody.replace(/On .* wrote:[\s\S]*$/, '')
-			.replace(/^>.*$/gm, '')
-			.replace(/From:.*[\s\S]*?Subject:.*/, '')
-			.replace(/\n\s*\n/g, '\n')
-			.trim();
+		// 1. Triage Context (Stage 1): Strict limit
+		var cleanBodyTriage = cleanEmailBody(rawBody, CONFIG.MAX_TRIAGE_BODY_CHARS || 500);
 
-		// Truncate for Stage 1 Preview (500 chars)
-		var previewBody = cleanBody.substring(0, 500);
-
-		// Prepare History for potential Stage 2
-		var historyBody = "";
-		if (msgCount > 1) {
-			var historyLimit = Math.max(0, msgCount - 3);
-			for (var h = msgCount - 2; h >= historyLimit; h--) {
-				var histMsg = allMessages[h];
-				var histBodyShort = histMsg.getPlainBody().substring(0, 800)
-					.replace(/\n\s*\n/g, '\n');
-				historyBody = `\n--- PREVIOUS MESSAGE (From: ${histMsg.getFrom()}) ---\n${histBodyShort}` + historyBody;
-			}
-		}
-
-		// Full body for Stage 2
-		var fullContextBody = `[LATEST MESSAGE]\n${cleanBody.substring(0, 3000)}`;
-		if (historyBody) {
-			fullContextBody += `\n\n[THREAD HISTORY]${historyBody}`;
-		}
+		// 2. Draft Context (Stage 2): Larger limit
+		var cleanBodyDraft = cleanEmailBody(rawBody, CONFIG.MAX_DRAFT_BODY_CHARS || 3000);
 
 		stage1Batch.push({
 			id: msgId,
 			from: lastMsg.getFrom(),
 			subject: lastMsg.getSubject(),
-			body: previewBody, // LIGHTWEIGHT
+			body: cleanBodyTriage, // LIGHTWEIGHT (Triage Limit)
 			labels: thread.getLabels().map(l => l.getName())
 		});
 
 		threadMap[msgId] = {
 			thread: thread,
 			message: lastMsg,
-			fullBody: fullContextBody
+			fullBody: cleanBodyDraft // FULL CONTEXT (Draft Limit)
 		};
 	}
 
@@ -246,23 +224,6 @@ function processIncomingMail() {
 	Logger.log(`Updated LAST_PROCESSED_TIMESTAMP to: ${runTimestamp}`);
 }
 
-/**
- * DEBUG/MANUAL TOOL: Force re-processing of recent emails.
- * Resets the last run timestamp to 24 hours ago and triggers processing.
- * Useful if you want to re-triage emails from today.
- */
-function forceProcessRecentMessages() {
-	var scriptProperties = PropertiesService.getScriptProperties();
-	// Set timestamp to 24 hours ago
-	var yesterday = Math.floor((Date.now() - 24 * 60 * 60 * 1000) / 1000);
-	scriptProperties.setProperty('LAST_PROCESSED_TIMESTAMP', yesterday.toString());
-
-	Logger.log("Forced reset of timestamp to " + yesterday + " (24 hours ago).");
-	Logger.log("Triggering processIncomingMail()...");
-
-	processIncomingMail();
-}
-
 // Helper: Call Generic Webhook
 function callWebhook(decision, message) {
 	if (!CONFIG.WEBHOOK_URL || CONFIG.WEBHOOK_URL.indexOf('http') === -1 || CONFIG.WEBHOOK_URL.includes('YOUR_WEBHOOK_URL')) {
@@ -329,7 +290,9 @@ function constructQuotedReply(originalMessage, newDraftText) {
 
 	// Build the HTML
 	var html = `
+    <div dir="ltr" style="font-family: Arial, sans-serif; font-size: 12.8px; color: rgb(34, 34, 34);">
     ${htmlDraftText}
+    </div>
     <br><br>
     <div class="gmail_quote">
       On ${dateStr}, ${from} wrote:<br>
@@ -340,3 +303,46 @@ function constructQuotedReply(originalMessage, newDraftText) {
   `;
 	return html;
 }
+
+/**
+ * Helper to clean email body:
+ * - Preserves quotes
+ * - Removes IGNORE_PHRASES (boilerplate)
+ * - Strips internal headers
+ * - Truncates to custom limit
+ */
+function cleanEmailBody(rawBody, maxLength) {
+	var body = rawBody;
+
+	// 1. Remove Ignore Phrases
+	if (CONFIG.IGNORE_PHRASES && CONFIG.IGNORE_PHRASES.length > 0) {
+		CONFIG.IGNORE_PHRASES.forEach(phrase => {
+			if (phrase instanceof RegExp) {
+				body = body.replace(phrase, '');
+			} else {
+				// Global replace of the string
+				body = body.split(phrase).join('');
+			}
+		});
+	}
+
+	// 2. Strip Metadata Headers (common in forwarded/replied chains)
+	// Attempts to remove "From: ...", "Sent: ...", "To: ...", "Subject: ..." lines
+	body = body.replace(/^From:.*$/gm, '')
+		.replace(/^Sent:.*$/gm, '')
+		.replace(/^Date:.*$/gm, '')
+		.replace(/^To:.*$/gm, '')
+		.replace(/^Subject:.*$/gm, '');
+
+	// 3. Cleanup Whitespace
+	body = body.replace(/\n\s*\n/g, '\n').trim();
+
+	// 4. Truncate
+	var limit = maxLength || 2000;
+	if (body.length > limit) {
+		body = body.substring(0, limit) + "\n...[TRUNCATED]";
+	}
+
+	return body;
+}
+

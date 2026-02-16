@@ -110,31 +110,29 @@ function buildActiveContext(forceRefresh) {
 		styleSection = "MY WRITING STYLE / VOICE EXAMPLES (Mimic this tone):\n" + styleExamples.join("\n---\n") + "\n\n";
 	}
 
-	var contextParts = [];
-
+	// 1. Projects (Used in BOTH)
+	var projectString = "";
 	if (projectContexts.size > 0) {
-		contextParts.push("ACTIVE PROJECTS:\n- " + Array.from(projectContexts).join("\n- "));
+		projectString = "ACTIVE PROJECTS:\n- " + Array.from(projectContexts).join("\n- ");
 	}
 
+	// 2. Recent Activity (Used ONLY in Triage)
+	var recentActivityParts = [];
 	if (recentSubjects.size > 0) {
-		// Limit recent subjects to top 30 to save space
 		var subjectsArr = Array.from(recentSubjects).slice(0, 30);
-		contextParts.push("RECENT EMAIL SUBJECTS:\n- " + subjectsArr.join("\n- "));
+		recentActivityParts.push("RECENT EMAIL SUBJECTS:\n- " + subjectsArr.join("\n- "));
 	}
-
 	if (recentContacts.size > 0) {
-		// Limit contacts to top 40 to ensure we capture colleagues like potential "Laura Pynn"
 		var contactsArr = Array.from(recentContacts).slice(0, 40);
-		contextParts.push("RECENT CONTACTS (VIPs / Colleagues):\n- " + contactsArr.join("\n- "));
+		recentActivityParts.push("RECENT CONTACTS (VIPs / Colleagues):\n- " + contactsArr.join("\n- "));
 	}
+	var recentActivityString = recentActivityParts.join("\n\n");
 
-	var coreContext = contextParts.join("\n\n");
+	// Triage Context: Core Context (Projects + Recent Activity)
+	var triageContext = [projectString, recentActivityString].filter(function (s) { return s; }).join("\n\n");
 
-	// Triage Context: Core Context only (Projects + Recent Activity)
-	var triageContext = coreContext;
-
-	// Drafting Context: Style + Core Context
-	var draftingContext = styleSection + "RECENT ACTIVITY CONTEXT:\n" + coreContext;
+	// Drafting Context: Style + Projects ONLY (No noisy recent activity)
+	var draftingContext = styleSection + (projectString ? ("\nRELEVANT CONTEXT:\n" + projectString) : "");
 
 	// Truncate based on character count estimate
 	const MAX_CONTEXT_CHARS = 50000;
@@ -208,27 +206,4 @@ function isExcluded(emailString) {
 	return CONFIG.EXCLUDED_DOMAINS.some(domain => emailString.toLowerCase().includes(domain.toLowerCase()));
 }
 
-/**
- * DEBUG: Run this function manually to inspect the current cache state.
- */
-function inspectContextCache() {
-	var cache = CacheService.getScriptCache();
-	var cachedContext = cache.get("active_context_obj");
 
-	if (!cachedContext) {
-		Logger.log("CACHE STATUS: Empty / Expired");
-		return;
-	}
-
-	var ctx = JSON.parse(cachedContext);
-	Logger.log("CACHE STATUS: Found");
-	Logger.log("--------------------------------------------------");
-	Logger.log(`TRIAGE CONTEXT (${ctx.triageContext.length} chars) [First 2000 chars]:\n` + ctx.triageContext.substring(0, 2000) + "\n");
-	Logger.log("--------------------------------------------------");
-	Logger.log(`DRAFTING CONTEXT (${ctx.draftingContext.length} chars) [First 2000 chars]:\n` + ctx.draftingContext.substring(0, 2000) + "\n");
-	Logger.log("--------------------------------------------------");
-}
-
-function forceBuildActiveContext() {
-	buildActiveContext(true);
-}

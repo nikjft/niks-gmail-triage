@@ -20,13 +20,31 @@ var CONFIG = {
 	GEMINI_MODEL_DRAFT: 'gemini-2.5-flash',
 	// ---------------- BATCH OPTIMIZATION ----------------
 	MIN_BATCH_SIZE: 5,         // Wait for 5 emails before running...
-	MAX_WAIT_TIME_MINUTES: 120, // ...unless it's been 2 hours since last run.
+	MAX_WAIT_TIME_MINUTES: 30, // ...unless it's been 2 hours since last run.
 
 	// Safety Flag: If false, actions like ARCHIVE/BLOCK will only label the email.
 	ENABLE_DESTRUCTIVE_ACTIONS: false,
 
 	// How many emails to process per execution (keep low to avoid timeout)
 	MAX_EMAILS_TO_PROCESS: 30,
+
+	// ---------------- CLEANUP & OPTIMIZATION ----------------
+	MAX_TRIAGE_BODY_CHARS: 500, // Short preview for Triage (Stage 1)
+	MAX_DRAFT_BODY_CHARS: 3000, // Longer context for Drafting (Stage 2)
+	IGNORE_PHRASES: [
+		/This message is intended only for.+$/i,
+		'Sent from my iPhone',
+		'Sent from my Android',
+		'Get Outlook for iOS',
+		'__',
+		'--',
+		// Regex to remove long legal disclaimers, robust to * or newlines
+		/[\*]*\s*This\s+email\s+and\s+any\s+files\s+transmitted[\s\S]*?strictly\s+prohibited\.?/ig,
+		/See\s+Your\s+Tech\s+Stack\s+Now.+$/ig,
+		// Regex for "This e-mail message... sole use of" disclaimer
+		/This\s+(e-?mail|email)\s+message[\s\S]*?permanently\s+delete\s+this\s+message\s+and\s+any\s+attachments\.?/ig
+
+	],
 
 	// ---------------- SOURCES & LABELS ----------------
 	// Search queries to find emails to triage
