@@ -217,10 +217,8 @@ function processIncomingMail() {
 						// Construct HTML Body with Quoted History
 						var htmlBody = constructQuotedReply(threadObj.message, draftResult.draft_text);
 
-						// Create Draft with HTML support
-						threadObj.thread.createDraftReplyAll("", {
-							htmlBody: htmlBody
-						});
+						// Create Draft with HTML support, excluding self from recipients
+						createDraftReplyAllExcludingSelf(threadObj.thread, threadObj.message, htmlBody);
 						Logger.log(`Draft created for ${msgId}`);
 					} catch (e) {
 						Logger.log(`Error creating draft for ${msgId}: ${e.toString()}`);
@@ -355,5 +353,104 @@ function cleanEmailBody(rawBody, maxLength) {
 	}
 
 	return body;
+}
+
+/**
+ * Creates a reply-all draft for a thread, but excludes the user's own email and aliases from recipients.
+ * @param {GmailThread} thread 
+ * @param {GmailMessage} originalMessage 
+ * @param {String} htmlBody 
+ */
+function createDraftReplyAllExcludingSelf(thread, originalMessage, htmlBody) {
+	var myEmail = Session.getActiveUser().getEmail().toLowerCase();
+	var aliases = [];
+	try {
+		aliases = GmailApp.getAliases().map(a => a.toLowerCase());
+	} catch (e) {
+		Logger.log("Error getting aliases: " + e.toString());
+	}
+
+	function isMe(email) {
+		var cleanEmail = email.toLowerCase().trim();
+		if (cleanEmail === myEmail) return true;
+		return aliases.indexOf(cleanEmail) !== -1;
+	}
+
+	// Helper to extract email addresses from headers like "Name <email@example.com>"
+	function extractEmailAddresses(headerVal) {
+		if (!headerVal) return [];
+		var emails = [];
+		var parts = headerVal.split(',');
+		parts.forEach(part => {
+			var match = part.match(/<([^>]+)>/);
+			var email = match ? match[1] : part;
+			email = email.trim();
+			if (email) {
+				emails.push(email);
+			}
+		});
+		return emails;
+	}
+
+	var toRecipients = [];
+	var ccRecipients = [];
+
+	// 1. Reply-to or From is the primary To recipient
+	var replyTo = originalMessage.getReplyTo() || originalMessage.getFrom();
+	var primaryEmails = extractEmailAddresses(replyTo);
+	primaryEmails.forEach(e => {
+		if (!isMe(e) && toRecipients.indexOf(e) === -1) {
+			toRecipients.push(e);
+		}
+	});
+
+	// If the primary sender is me, look at the original To recipients of the message
+	if (toRecipients.length === 0) {
+		var originalToEmails = extractEmailAddresses(originalMessage.getTo());
+		originalToEmails.forEach(e => {
+			if (!isMe(e) && toRecipients.indexOf(e) === -1) {
+				toRecipients.push(e);
+			}
+		});
+	}
+
+	// 2. Add other To and Cc recipients to Cc
+	var allTo = extractEmailAddresses(originalMessage.getTo());
+	var allCc = extractEmailAddresses(originalMessage.getCc());
+
+	allTo.forEach(e => {
+		if (!isMe(e) && toRecipients.indexOf(e) === -1 && ccRecipients.indexOf(e) === -1) {
+			ccRecipients.push(e);
+		}
+	});
+
+	allCc.forEach(e => {
+		if (!isMe(e) && toRecipients.indexOf(e) === -1 && ccRecipients.indexOf(e) === -1) {
+			ccRecipients.push(e);
+		}
+	});
+
+	var options = {
+		htmlBody: htmlBody,
+		threadId: thread.getId()
+	};
+
+	if (ccRecipients.length > 0) {
+		options.cc = ccRecipients.join(',');
+	}
+
+	// If there are no recipients left (e.g. email was only to/from me), default to sending to me
+	var toField = toRecipients.join(',');
+	if (!toField) {
+		toField = myEmail;
+	}
+
+	// Make sure the subject prefix matches thread context
+	var subject = originalMessage.getSubject();
+	if (subject && !/^re:/i.test(subject)) {
+		subject = "Re: " + subject;
+	}
+
+	GmailApp.createDraft(toField, subject, "", options);
 }
 
