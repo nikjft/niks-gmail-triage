@@ -32,12 +32,13 @@ STEP 1. IMPORTANCE (pick exactly one)
   * a status or timeline change on an active prospect deal or a client account: a reschedule, a stall, a new stakeholder, a budget or pricing signal, an escalation. Star this EVEN WHEN a teammate wrote the reply and nothing is asked of Nik
   * a job candidate writing directly about their own application, an interview, references, an offer, or a start date
   * anything that qualifies for draft_reply or notify
-  If you are unsure whether a status change matters, STAR it. A wrong star costs seconds. A missed deal signal costs more.
+  If a message shows a concrete status signal and you doubt it matters, STAR it. A wrong star costs seconds. A missed deal signal costs more.
+  This does NOT apply when the message shows no signal at all. A vague or thin message with nothing concrete is UNSURE, not STAR.
   Narrow exception: do not STAR routine meeting-time coordination from sarah@mcgaw.io or mc@mcgaw.io on an engagement that is already moving ("does Tuesday work"). If the same message also carries a status signal, the status signal wins and it is STAR.
 - NEITHER: normal priority, read later. This is the right answer for most mail.
 - ARCHIVE: low value. Newsletters, marketing, cold outreach, vendors pitching services to McGaw (credit lines, recruiting services, lead generation, agencies), irrelevant notifications, automated meeting notes or AI recordings, meeting accept or decline notices with no comment, and automated applicant-tracking notices about McGaw's own hiring (application received, stage changed). A real candidate emailing directly is NOT this. See STAR.
 - BLOCK: obvious spam or phishing, and podcast or interview invitations from management-consulting shows.
-- UNSURE: you genuinely cannot tell. Prefer UNSURE over a wrong ARCHIVE or BLOCK. Never choose ARCHIVE or BLOCK when the sender could be a client, prospect, candidate, or teammate.
+- UNSURE: you genuinely cannot tell. This includes a thin or vague preview with no concrete signal, such as "Any thoughts on my earlier note?" from someone the FACTS do not tie to a deal, client, or candidate. Use reason_code THIN_PREVIEW and needs_full_thread true. Never pair STAR with THIN_PREVIEW. Prefer UNSURE over a wrong ARCHIVE or BLOCK. Never choose ARCHIVE or BLOCK when the sender could be a client, prospect, candidate, or teammate.
 
 STEP 2. DRAFT_REPLY (true or false)
 True only when ALL of these hold:
@@ -71,6 +72,7 @@ EXAMPLES
 9. "Quick question about your lead gen, 15 minutes this week?" from an unknown vendor. -> ARCHIVE, SOLICITATION.
 10. A client writes "Nik, the August overage looks wrong. Third time asking. Need an answer today." Nik is in To. -> STAR, draft_reply true, notify true, CLIENT_ISSUE.
 11. A client writes "Thanks, got it!" and Nik already replied earlier in the thread. -> NEITHER, draft_reply false, FYI.
+12. An unknown sender writes "Any thoughts on my earlier note?" with no other detail. -> UNSURE, draft_reply false, THIN_PREVIEW, needs_full_thread true.
 
 OUTPUT FORMAT
 Return strictly a JSON array with exactly one object per email, in the order given. Each object carries the email ID in "id". No markdown fences.

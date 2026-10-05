@@ -433,6 +433,10 @@ function normalizeDecision(d, facts) {
 		Logger.log('Downgraded ' + out.importance + ' to UNSURE (low confidence or needs full thread).');
 		out.importance = 'UNSURE';
 	}
+	if (out.importance === 'STAR' && out.reason_code === 'THIN_PREVIEW') {
+		Logger.log('Downgraded STAR to UNSURE (reason_code THIN_PREVIEW contradicts STAR).');
+		out.importance = 'UNSURE';
+	}
 	if (out.importance !== 'STAR') out.draft_reply = false;
 	if (facts && facts.last_from_nik) out.draft_reply = false;
 	if (out.importance === 'ARCHIVE' || out.importance === 'BLOCK') out.notify = false;
