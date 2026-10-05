@@ -1,5 +1,13 @@
 
 function buildActiveContext(forceRefresh) {
+	if (CONFIG.ENABLE_CONTEXT === false) {
+		Logger.log("Context building disabled (ENABLE_CONTEXT is false).");
+		return {
+			triageContext: "",
+			draftingContext: ""
+		};
+	}
+
 	// 1. Check Cache first (unless forcing refresh)
 	var cache = CacheService.getScriptCache();
 
@@ -212,6 +220,11 @@ function isExcluded(emailString) {
  * DEBUG: Run this function manually to inspect the current cache state.
  */
 function inspectContextCache() {
+	if (CONFIG.ENABLE_CONTEXT === false) {
+		Logger.log("CACHE STATUS: Context building is disabled (ENABLE_CONTEXT is false).");
+		return;
+	}
+
 	var cache = CacheService.getScriptCache();
 	var cachedContext = cache.get("active_context_obj");
 
@@ -230,5 +243,9 @@ function inspectContextCache() {
 }
 
 function forceBuildActiveContext() {
+	if (CONFIG.ENABLE_CONTEXT === false) {
+		Logger.log("Force build context skipped (ENABLE_CONTEXT is false).");
+		return;
+	}
 	buildActiveContext(true);
 }

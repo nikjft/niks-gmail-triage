@@ -3,6 +3,10 @@
  * Refreshes the context cache so it's warm for the triage run.
  */
 function refreshContextCache() {
+	if (CONFIG.ENABLE_CONTEXT === false) {
+		Logger.log("Context refresh skipped (ENABLE_CONTEXT is false).");
+		return;
+	}
 	Logger.log("Force refreshing context cache...");
 	buildActiveContext(true); // true = force refresh
 }
@@ -194,34 +198,38 @@ function processIncomingMail() {
 		}
 	}
 
-	// 6. CALL STAGE 2 (Drafting) - Only if needed
+	// 6. CALL STAGE 2 (Drafting) - Only if enabled and needed
 	if (draftCandidates.length > 0) {
-		Logger.log(`Running Stage 2 Drafting for ${draftCandidates.length} emails...`);
+		if (CONFIG.ENABLE_DRAFTING === false) {
+			Logger.log(`Drafting disabled (ENABLE_DRAFTING is false). Tagged ${draftCandidates.length} email(s) with ${CONFIG.LABELS.DRAFT}, but skipped creating drafts.`);
+		} else {
+			Logger.log(`Running Stage 2 Drafting for ${draftCandidates.length} emails...`);
 
-		var draftDecisions = {};
-		try {
-			draftDecisions = callGeminiStage2Draft(draftCandidates, contextObj.draftingContext); // FULL CONTEXT
-		} catch (e) {
-			Logger.log("CRITICAL ERROR in Stage 2 Drafting: " + e.toString());
-			Logger.log("Aborting run to ensure drafts are retried. Timestamp will NOT be updated.");
-			return;
-		}
+			var draftDecisions = {};
+			try {
+				draftDecisions = callGeminiStage2Draft(draftCandidates, contextObj.draftingContext); // FULL CONTEXT
+			} catch (e) {
+				Logger.log("CRITICAL ERROR in Stage 2 Drafting: " + e.toString());
+				Logger.log("Aborting run to ensure drafts are retried. Timestamp will NOT be updated.");
+				return;
+			}
 
-		if (draftDecisions) {
-			for (var msgId in draftDecisions) {
-				var draftResult = draftDecisions[msgId];
-				var threadObj = threadMap[msgId];
+			if (draftDecisions) {
+				for (var msgId in draftDecisions) {
+					var draftResult = draftDecisions[msgId];
+					var threadObj = threadMap[msgId];
 
-				if (draftResult && draftResult.draft_text && threadObj) {
-					try {
-						// Construct HTML Body with Quoted History
-						var htmlBody = constructQuotedReply(threadObj.message, draftResult.draft_text);
+					if (draftResult && draftResult.draft_text && threadObj) {
+						try {
+							// Construct HTML Body with Quoted History
+							var htmlBody = constructQuotedReply(threadObj.message, draftResult.draft_text);
 
-						// Create Draft with HTML support, excluding self from recipients
-						createDraftReplyAllExcludingSelf(threadObj.thread, threadObj.message, htmlBody);
-						Logger.log(`Draft created for ${msgId}`);
-					} catch (e) {
-						Logger.log(`Error creating draft for ${msgId}: ${e.toString()}`);
+							// Create Draft with HTML support, excluding self from recipients
+							createDraftReplyAllExcludingSelf(threadObj.thread, threadObj.message, htmlBody);
+							Logger.log(`Draft created for ${msgId}`);
+						} catch (e) {
+							Logger.log(`Error creating draft for ${msgId}: ${e.toString()}`);
+						}
 					}
 				}
 			}

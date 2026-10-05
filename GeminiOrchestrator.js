@@ -20,15 +20,16 @@ function callGeminiStage1Triage(emailBatch, triageContext) {
     --------------------------------------------------`;
 	}).join("\n");
 
-	var userPrompt = `
-    ACTIVE CONTEXT (Projects & Contacts):
-    ${triageContext}
+	var hasContext = CONFIG.ENABLE_CONTEXT !== false && triageContext && triageContext.trim().length > 0;
+	var contextBlock = hasContext ? `ACTIVE CONTEXT (Projects & Contacts):\n    ${triageContext}\n\n    ` : '';
+	var reviewInstruction = hasContext ? "Review each email against the Active Context." : "Review each email.";
 
-    INCOMING EMAILS TO TRIAGE (${emailBatch.length} items):
+	var userPrompt = `
+    ${contextBlock}INCOMING EMAILS TO TRIAGE (${emailBatch.length} items):
     ${emailListString}
     
     INSTRUCTIONS:
-    Review each email against the Active Context.
+    ${reviewInstruction}
     Return a JSON object where the keys are the "ID" provided above (e.g. "msg_123") and the values are the decision objects.
     USE THE OUTPUT FORMAT DEFINED IN THE SYSTEM PROMPT.
   `;
@@ -67,11 +68,11 @@ function callGeminiStage2Draft(emailBatch, draftingContext) {
     --------------------------------------------------`;
 	}).join("\n");
 
-	var userPrompt = `
-    ACTIVE CONTEXT (Style & History):
-    ${draftingContext}
+	var hasContext = CONFIG.ENABLE_CONTEXT !== false && draftingContext && draftingContext.trim().length > 0;
+	var contextBlock = hasContext ? `ACTIVE CONTEXT (Style & History):\n    ${draftingContext}\n\n    ` : '';
 
-    EMAILS TO DRAFT (${emailBatch.length} items):
+	var userPrompt = `
+    ${contextBlock}EMAILS TO DRAFT (${emailBatch.length} items):
     ${emailListString}
   `;
 

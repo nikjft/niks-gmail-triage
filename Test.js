@@ -9,10 +9,20 @@ function testConfiguration() {
 	Logger.log("Triage Model: " + CONFIG.GEMINI_MODEL_TRIAGE);
 	Logger.log("Draft Model: " + CONFIG.GEMINI_MODEL_DRAFT);
 	Logger.log("Trello Label: " + CONFIG.TRELLO_LABEL);
+	Logger.log("Enable Context: " + CONFIG.ENABLE_CONTEXT);
+	Logger.log("Enable Drafting: " + CONFIG.ENABLE_DRAFTING);
+	Logger.log("Enable Destructive Actions: " + CONFIG.ENABLE_DESTRUCTIVE_ACTIONS);
 }
 
 function testContextBuilder() {
 	Logger.log("--- Testing Context Builder ---");
+	if (CONFIG.ENABLE_CONTEXT === false) {
+		Logger.log("ℹ️ Context building is disabled (CONFIG.ENABLE_CONTEXT is false).");
+		var contextObj = buildActiveContext(true);
+		Logger.log("Triage Context: '" + contextObj.triageContext + "'");
+		Logger.log("Drafting Context: '" + contextObj.draftingContext + "'");
+		return;
+	}
 	try {
 		// Test Context Splitting
 		var contextObj = buildActiveContext(true); // Force Refresh

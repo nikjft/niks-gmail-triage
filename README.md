@@ -46,8 +46,10 @@ The logic respects the following categories of settings:
 - **Context & Exclusions**:
   - `TRELLO_LABEL`: The Gmail label applied to Trello notifications. The agent extracts board names for project context. Set to `null` to disable.
   - `EXCLUDED_DOMAINS`: List of domains/emails to ignore for context building (e.g., automation bots).
-- **Safety & Destructive Actions**:
+- **Safety & Feature Flags**:
   - `ENABLE_DESTRUCTIVE_ACTIONS`: Set to `true` to allow the AI to automatically Archive or Trash emails. If `false`, it only applies labels.
+  - `ENABLE_CONTEXT`: Set to `false` to disable refreshing context or inserting it into prompts based on email history (sent emails, starred emails, Trello).
+  - `ENABLE_DRAFTING`: Set to `false` to disable generating draft replies. Emails flagged for replies are still tagged with `ai_draft` and starred, but no draft is created.
 - **Batching (Token Optimization)**:
   - `MIN_BATCH_SIZE`: Minimum emails required to trigger a run (e.g., `5`).
   - `MAX_WAIT_TIME_MINUTES`: Force a run if this time has passed, even if the batch isn't full (e.g., `30`).

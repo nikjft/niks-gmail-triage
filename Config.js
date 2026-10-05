@@ -25,6 +25,12 @@ var CONFIG = {
 	// Safety Flag: If false, actions like ARCHIVE/BLOCK will only label the email.
 	ENABLE_DESTRUCTIVE_ACTIONS: false,
 
+	// Context Flag: If false, disables refreshing or inserting context based on email history.
+	ENABLE_CONTEXT: false,
+
+	// Drafting Flag: If false, tags emails for draft (applies ai_draft label) but does not write draft replies.
+	ENABLE_DRAFTING: false,
+
 	// How many emails to process per execution (keep low to avoid timeout)
 	MAX_EMAILS_TO_PROCESS: 30,
 
