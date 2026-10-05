@@ -85,6 +85,20 @@ function processIncomingMail() {
 		if (msgCount === 0) continue;
 
 		var lastMsg = allMessages[msgCount - 1];
+
+		// --- FILTER 1: Skip threads whose last message is from user (and expire stale drafts once replied) ---
+		if (isMessageFromUser(lastMsg)) {
+			Logger.log(`Skipping thread ${thread.getId()}: last message is from user. Expiring stale drafts.`);
+			expireStaleDraftsForThread(thread);
+			continue;
+		}
+
+		// --- FILTER 2: Deterministic skip for EXCLUDED_DOMAINS before any model call ---
+		if (isSenderExcluded(lastMsg.getFrom())) {
+			Logger.log(`Skipping thread ${thread.getId()}: sender "${lastMsg.getFrom()}" matches EXCLUDED_DOMAINS.`);
+			continue;
+		}
+
 		var msgId = "msg_" + i;
 
 		// --- PREPARE FULL CONTENT (Optimized) ---
@@ -142,6 +156,9 @@ function processIncomingMail() {
 		var message = threadObj.message;
 
 		try {
+			// Remove prior ai_* labels from the thread before applying new ones
+			removeAiLabels(thread);
+
 			var applyLabel = function (labelName) {
 				var label = GmailApp.getUserLabelByName(labelName) || GmailApp.createLabel(labelName);
 				thread.addLabel(label);
@@ -462,3 +479,116 @@ function createDraftReplyAllExcludingSelf(thread, originalMessage, htmlBody) {
 	GmailApp.createDraft(toField, subject, "", options);
 }
 
+
+/**
+ * Removes prior ai_* labels from the thread before applying new ones.
+ * @param {GmailThread} thread
+ */
+function removeAiLabels(thread) {
+	try {
+		var labels = thread.getLabels();
+		labels.forEach(function (lbl) {
+			if (lbl.getName().toLowerCase().startsWith("ai_")) {
+				thread.removeLabel(lbl);
+			}
+		});
+	} catch (e) {
+		Logger.log("Error removing prior ai_* labels: " + e.toString());
+	}
+}
+
+/**
+ * Checks if a sender email address matches any domain or pattern in CONFIG.EXCLUDED_DOMAINS.
+ * @param {String} fromHeader
+ * @return {Boolean}
+ */
+function isSenderExcluded(fromHeader) {
+	if (!fromHeader || !CONFIG.EXCLUDED_DOMAINS || !Array.isArray(CONFIG.EXCLUDED_DOMAINS)) {
+		return false;
+	}
+	var email = fromHeader.toLowerCase();
+	return CONFIG.EXCLUDED_DOMAINS.some(function (domain) {
+		return email.indexOf(domain.toLowerCase()) !== -1;
+	});
+}
+
+/**
+ * Checks if a message was sent by the authenticated user or one of their aliases.
+ * @param {GmailMessage} message
+ * @return {Boolean}
+ */
+function isMessageFromUser(message) {
+	if (!message) return false;
+	var fromHeader = message.getFrom();
+	var email = extractSingleEmail(fromHeader);
+	return isUserEmail(email);
+}
+
+/**
+ * Helper to check if an email matches the active user or any alias.
+ * @param {String} email
+ * @return {Boolean}
+ */
+function isUserEmail(email) {
+	if (!email) return false;
+	var myEmail = Session.getActiveUser().getEmail().toLowerCase();
+	var aliases = [];
+	try {
+		aliases = GmailApp.getAliases().map(function (a) { return a.toLowerCase(); });
+	} catch (e) {
+		Logger.log("Error getting aliases: " + e.toString());
+	}
+	var cleanEmail = email.toLowerCase().trim();
+	if (cleanEmail === myEmail) return true;
+	return aliases.indexOf(cleanEmail) !== -1;
+}
+
+/**
+ * Helper to extract single email address from header like "Name <email@example.com>" or "email@example.com"
+ * @param {String} headerVal
+ * @return {String}
+ */
+function extractSingleEmail(headerVal) {
+	if (!headerVal) return "";
+	var match = headerVal.match(/<([^>]+)>/);
+	return (match ? match[1] : headerVal).trim().toLowerCase();
+}
+
+/**
+ * Expire stale drafts for a thread once replied (also removes ai_draft label).
+ * @param {GmailThread} thread
+ */
+var _cachedDrafts = null;
+function expireStaleDraftsForThread(thread) {
+	try {
+		// 1. Remove ai_draft label if present
+		var draftLabelName = (CONFIG.LABELS && CONFIG.LABELS.DRAFT) ? CONFIG.LABELS.DRAFT : "ai_draft";
+		var draftLabel = GmailApp.getUserLabelByName(draftLabelName);
+		if (draftLabel) {
+			thread.removeLabel(draftLabel);
+		}
+
+		// 2. Delete any drafts belonging to this thread
+		if (_cachedDrafts === null) {
+			try {
+				_cachedDrafts = GmailApp.getDrafts();
+			} catch (e) {
+				_cachedDrafts = [];
+				Logger.log("Error fetching drafts: " + e.toString());
+			}
+		}
+		var threadId = thread.getId();
+		_cachedDrafts.forEach(function (d) {
+			try {
+				if (d && d.getMessage && d.getMessage().getThread().getId() === threadId) {
+					d.deleteDraft();
+					Logger.log(`Deleted stale draft for thread ${threadId}`);
+				}
+			} catch (err) {
+				Logger.log(`Error deleting individual draft: ${err.toString()}`);
+			}
+		});
+	} catch (e) {
+		Logger.log(`Error expiring stale drafts for thread ${thread.getId()}: ${e.toString()}`);
+	}
+}
