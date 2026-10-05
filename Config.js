@@ -31,6 +31,12 @@ var CONFIG = {
 	// Drafting Flag: If false, tags emails for draft (applies ai_draft label) but does not write draft replies.
 	ENABLE_DRAFTING: false,
 
+	// Domains treated as internal (McGaw staff). Used for the FACTS line.
+	INTERNAL_DOMAINS: ['mcgaw.io'],
+
+	// Draft lint: if true, drafts that break voice rules are skipped and logged, not saved.
+	ENABLE_DRAFT_LINT: true,
+
 	// How many emails to process per execution (keep low to avoid timeout)
 	MAX_EMAILS_TO_PROCESS: 30,
 

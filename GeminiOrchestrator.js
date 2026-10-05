@@ -1,7 +1,51 @@
+
+/**
+ * Response schemas. They force valid enums, so a typo cannot turn into a wrong action.
+ * Kept in sync with the OUTPUT FORMAT blocks in Prompts.js.
+ */
+var TRIAGE_RESPONSE_SCHEMA = {
+	"type": "ARRAY",
+	"items": {
+		"type": "OBJECT",
+		"properties": {
+			"id": { "type": "STRING" },
+			"importance": { "type": "STRING", "enum": ["STAR", "NEITHER", "ARCHIVE", "BLOCK", "UNSURE"] },
+			"draft_reply": { "type": "BOOLEAN" },
+			"notify": { "type": "BOOLEAN" },
+			"notification_text": { "type": "STRING" },
+			"reason_code": {
+				"type": "STRING",
+				"enum": ["ACTIVE_DEAL_SIGNAL", "CLIENT_ISSUE", "ASK_OF_NIK", "CANDIDATE", "SIGNATURE", "TIME_SENSITIVE", "TONE", "ROUTINE_SCHEDULING", "SOLICITATION", "AUTOMATED", "ATS_NOISE", "SPAM", "FYI", "TEAMMATE_HANDLING", "FROM_NIK", "THIN_PREVIEW"]
+			},
+			"confidence": { "type": "STRING", "enum": ["high", "medium", "low"] },
+			"needs_full_thread": { "type": "BOOLEAN" },
+			"reason": { "type": "STRING" }
+		},
+		"required": ["id", "importance", "draft_reply", "notify", "notification_text", "reason_code", "confidence", "needs_full_thread", "reason"],
+		"propertyOrdering": ["id", "importance", "draft_reply", "notify", "notification_text", "reason_code", "confidence", "needs_full_thread", "reason"]
+	}
+};
+
+var DRAFT_RESPONSE_SCHEMA = {
+	"type": "ARRAY",
+	"items": {
+		"type": "OBJECT",
+		"properties": {
+			"id": { "type": "STRING" },
+			"draft_text": { "type": "STRING", "nullable": true },
+			"asks_covered": { "type": "ARRAY", "items": { "type": "STRING" } },
+			"abstain_reason": { "type": "STRING", "nullable": true },
+			"reason": { "type": "STRING" }
+		},
+		"required": ["id", "draft_text", "asks_covered", "abstain_reason", "reason"],
+		"propertyOrdering": ["id", "draft_text", "asks_covered", "abstain_reason", "reason"]
+	}
+};
+
 /**
  * STAGE 1: TRIAGE
  * Calls Gemini with a batch of emails for classification.
- * @param {Array} emailBatch Array of Objects {id, from, subject, body} (Body is truncated)
+ * @param {Array} emailBatch Array of Objects {id, from, subject, body, facts?} (Body is truncated)
  * @param {String} triageContext
  * @returns {Object} Map of email ID to Decision Object { importance, draft_reply, notify, reason }
  */
@@ -16,7 +60,7 @@ function callGeminiStage1Triage(emailBatch, triageContext) {
     EMAIL #${index} (ID: ${email.id}):
     From: ${email.from}
     Subject: ${email.subject}
-    Body Preview: ${email.body}
+    ${email.facts ? 'FACTS: ' + email.facts + '\n    ' : ''}Body Preview: ${email.body}
     --------------------------------------------------`;
 	}).join("\n");
 
@@ -30,16 +74,17 @@ function callGeminiStage1Triage(emailBatch, triageContext) {
     
     INSTRUCTIONS:
     ${reviewInstruction}
-    Return a JSON object where the keys are the "ID" provided above (e.g. "msg_123") and the values are the decision objects.
+    Return a JSON array with one decision object per email. Put the "ID" provided above (e.g. "msg_123") in each object's "id" field.
     USE THE OUTPUT FORMAT DEFINED IN THE SYSTEM PROMPT.
   `;
 
 	var payload = {
-		"contents": [{
-			"parts": [{ "text": PROMPTS.TRIAGE + "\n\n" + userPrompt }]
-		}],
+		"system_instruction": { "parts": [{ "text": PROMPTS.TRIAGE }] },
+		"contents": [{ "role": "user", "parts": [{ "text": userPrompt }] }],
 		"generationConfig": {
-			"response_mime_type": "application/json"
+			"temperature": 0,
+			"response_mime_type": "application/json",
+			"response_schema": TRIAGE_RESPONSE_SCHEMA
 		}
 	};
 
@@ -63,7 +108,7 @@ function callGeminiStage2Draft(emailBatch, draftingContext) {
     EMAIL (ID: ${email.id}):
     From: ${email.from}
     Subject: ${email.subject}
-    Body:
+    ${email.facts ? 'FACTS: ' + email.facts + '\n    ' : ''}${email.history ? 'THREAD HISTORY (oldest first, before the message below):\n' + email.history + '\n    ' : ''}Body of the message to answer:
     ${email.body}
     --------------------------------------------------`;
 	}).join("\n");
@@ -74,14 +119,18 @@ function callGeminiStage2Draft(emailBatch, draftingContext) {
 	var userPrompt = `
     ${contextBlock}EMAILS TO DRAFT (${emailBatch.length} items):
     ${emailListString}
+
+    Return a JSON array with one object per email. Put the "ID" in each object's "id" field.
+    USE THE OUTPUT FORMAT DEFINED IN THE SYSTEM PROMPT.
   `;
 
 	var payload = {
-		"contents": [{
-			"parts": [{ "text": PROMPTS.DRAFTING + "\n\n" + userPrompt }]
-		}],
+		"system_instruction": { "parts": [{ "text": PROMPTS.DRAFTING }] },
+		"contents": [{ "role": "user", "parts": [{ "text": userPrompt }] }],
 		"generationConfig": {
-			"response_mime_type": "application/json"
+			"temperature": 0.4,
+			"response_mime_type": "application/json",
+			"response_schema": DRAFT_RESPONSE_SCHEMA
 		}
 	};
 
@@ -126,12 +175,17 @@ function callGeminiApi(apiUrl, payload) {
 
 		var parsed = JSON.parse(contentText);
 
-		// Flatten Array if necessary
+		// Array of {id, ...} objects (current schema): convert to a map keyed by id.
+		// Legacy array of {msg_id: {...}} objects: flatten.
 		if (Array.isArray(parsed)) {
 			var flatMap = {};
 			parsed.forEach(item => {
-				for (var key in item) {
-					flatMap[key] = item[key];
+				if (item && typeof item.id === 'string') {
+					flatMap[item.id] = item;
+				} else {
+					for (var key in item) {
+						flatMap[key] = item[key];
+					}
 				}
 			});
 			return flatMap;
