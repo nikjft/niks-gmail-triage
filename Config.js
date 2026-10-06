@@ -10,7 +10,7 @@ var CONFIG = {
 	// ---------------- SECURITY & API ----------------
 	GEMINI_API_KEY: scriptProperties.getProperty('GEMINI_API_KEY'),
 	WEBHOOK_URL: scriptProperties.getProperty('WEBHOOK_URL'),
-	WEBHOOK_MODE: 'URL_PARAM',
+	WEBHOOK_MODE: 'JSON',
 	WEBHOOK_PARAM_NAME: 'message',
 
 	// ---------------- TUNING ----------------
@@ -28,8 +28,11 @@ var CONFIG = {
 	// Context Flag: If false, disables refreshing or inserting context based on email history.
 	ENABLE_CONTEXT: false,
 
-	// Drafting Flag: If false, tags emails for draft (applies ai_draft label) but does not write draft replies.
-	ENABLE_DRAFTING: false,
+	// Write Drafts Mode:
+	// 'DRAFT'   - Draft an email in Gmail per usual
+	// 'NONE'    - Do nothing (tag email for draft, but do not generate or write drafts)
+	// 'WEBHOOK' - Send draft and abstain_reason to webhook, nowhere else
+	WRITE_DRAFTS: 'WEBHOOK',
 
 	// How many emails to process per execution (keep low to avoid timeout)
 	MAX_EMAILS_TO_PROCESS: 30,

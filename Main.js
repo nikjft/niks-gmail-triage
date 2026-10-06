@@ -142,7 +142,9 @@ function processIncomingMail() {
 	}
 
 	// 5. Execute Triage Actions & Identify Draft Candidates
+	var writeDraftsMode = (CONFIG.WRITE_DRAFTS || CONFIG.DRAFT_MODE || (CONFIG.ENABLE_DRAFTING === false ? 'NONE' : 'DRAFT')).toUpperCase();
 	var draftCandidates = []; // Array of { id, ... }
+	var notificationsToSend = {}; // Map of msgId -> boolean
 
 	for (var msgId in triageDecisions) {
 		var decision = triageDecisions[msgId];
@@ -190,24 +192,28 @@ function processIncomingMail() {
 					break;
 			}
 
-			// NOTIFY Check
+			// NOTIFY Check - record to dispatch after drafting stage
 			if (decision.notify) {
 				applyLabel(CONFIG.LABELS.NOTIFY);
 				message.star();
-				callWebhook(decision, message);
+				notificationsToSend[msgId] = true;
 			}
 
-			// DRAFT CHECK -> Queue for Stage 2
+			// DRAFT CHECK -> Queue for Stage 2 if drafting is enabled
 			if (decision.draft_reply) {
 				applyLabel(CONFIG.LABELS.DRAFT);
 				message.star(); // Keep starred if replying
 
-				draftCandidates.push({
-					id: msgId,
-					from: message.getFrom(),
-					subject: message.getSubject(),
-					body: threadObj.fullBody // FULL CONTEXT
-				});
+				if (writeDraftsMode !== 'NONE') {
+					draftCandidates.push({
+						id: msgId,
+						from: message.getFrom(),
+						subject: message.getSubject(),
+						body: threadObj.fullBody // FULL CONTEXT
+					});
+				} else {
+					Logger.log(`Drafting mode is NONE. Tagged ${msgId} for draft but skipping draft generation.`);
+				}
 			}
 
 		} catch (e) {
@@ -215,40 +221,63 @@ function processIncomingMail() {
 		}
 	}
 
-	// 6. CALL STAGE 2 (Drafting) - Only if enabled and needed
+	// 6. CALL STAGE 2 (Drafting) - Executed for DRAFT and WEBHOOK modes
+	var draftDecisions = {};
 	if (draftCandidates.length > 0) {
-		if (CONFIG.ENABLE_DRAFTING === false) {
-			Logger.log(`Drafting disabled (ENABLE_DRAFTING is false). Tagged ${draftCandidates.length} email(s) with ${CONFIG.LABELS.DRAFT}, but skipped creating drafts.`);
-		} else {
-			Logger.log(`Running Stage 2 Drafting for ${draftCandidates.length} emails...`);
+		Logger.log(`Running Stage 2 Drafting for ${draftCandidates.length} emails (mode: ${writeDraftsMode})...`);
 
-			var draftDecisions = {};
-			try {
-				draftDecisions = callGeminiStage2Draft(draftCandidates, contextObj.draftingContext); // FULL CONTEXT
-			} catch (e) {
-				Logger.log("CRITICAL ERROR in Stage 2 Drafting: " + e.toString());
-				Logger.log("Aborting run to ensure drafts are retried. Timestamp will NOT be updated.");
-				return;
-			}
+		try {
+			draftDecisions = callGeminiStage2Draft(draftCandidates, contextObj.draftingContext); // FULL CONTEXT
+		} catch (e) {
+			Logger.log("CRITICAL ERROR in Stage 2 Drafting: " + e.toString());
+			Logger.log("Aborting run to ensure drafts are retried. Timestamp will NOT be updated.");
+			return;
+		}
 
-			if (draftDecisions) {
-				for (var msgId in draftDecisions) {
-					var draftResult = draftDecisions[msgId];
-					var threadObj = threadMap[msgId];
+		if (draftDecisions && writeDraftsMode === 'DRAFT') {
+			for (var msgId in draftDecisions) {
+				var draftResult = draftDecisions[msgId];
+				var threadObj = threadMap[msgId];
 
-					if (draftResult && draftResult.draft_text && threadObj) {
-						try {
-							// Construct HTML Body with Quoted History
-							var htmlBody = constructQuotedReply(threadObj.message, draftResult.draft_text);
+				if (draftResult && draftResult.draft_text && threadObj) {
+					try {
+						// Construct HTML Body with Quoted History
+						var htmlBody = constructQuotedReply(threadObj.message, draftResult.draft_text);
 
-							// Create Draft with HTML support, excluding self from recipients
-							createDraftReplyAllExcludingSelf(threadObj.thread, threadObj.message, htmlBody);
-							Logger.log(`Draft created for ${msgId}`);
-						} catch (e) {
-							Logger.log(`Error creating draft for ${msgId}: ${e.toString()}`);
-						}
+						// Create Draft with HTML support, excluding self from recipients
+						createDraftReplyAllExcludingSelf(threadObj.thread, threadObj.message, htmlBody);
+						Logger.log(`Draft created in Gmail for ${msgId}`);
+					} catch (e) {
+						Logger.log(`Error creating draft for ${msgId}: ${e.toString()}`);
 					}
 				}
+			}
+		} else if (writeDraftsMode === 'WEBHOOK') {
+			Logger.log(`Drafting mode is WEBHOOK: drafts will be sent to webhook and not created in Gmail.`);
+		}
+	}
+
+	// 7. WEBHOOK DISPATCH
+	for (var msgId in triageDecisions) {
+		var decision = triageDecisions[msgId];
+		var threadObj = threadMap[msgId];
+		if (!threadObj) continue;
+
+		var draftResult = draftDecisions[msgId] || null;
+		var isDraftCandidate = draftCandidates.some(c => c.id === msgId);
+		var shouldSendWebhook = false;
+
+		if (notificationsToSend[msgId]) {
+			shouldSendWebhook = true;
+		} else if (writeDraftsMode === 'WEBHOOK' && decision.draft_reply && isDraftCandidate) {
+			shouldSendWebhook = true;
+		}
+
+		if (shouldSendWebhook) {
+			try {
+				callWebhook(decision, threadObj.message, draftResult);
+			} catch (e) {
+				Logger.log(`Error sending webhook for ${msgId}: ${e.toString()}`);
 			}
 		}
 	}
@@ -259,7 +288,7 @@ function processIncomingMail() {
 }
 
 // Helper: Call Generic Webhook
-function callWebhook(decision, message) {
+function callWebhook(decision, message, draftResult) {
 	if (!CONFIG.WEBHOOK_URL || CONFIG.WEBHOOK_URL.indexOf('http') === -1 || CONFIG.WEBHOOK_URL.includes('YOUR_WEBHOOK_URL')) {
 		Logger.log("Webhook skipped (URL not configured).");
 		return;
@@ -270,7 +299,8 @@ function callWebhook(decision, message) {
 	var finalUrl = CONFIG.WEBHOOK_URL;
 
 	// Default Notification Text
-	var notifText = decision.notification_text || `Action required for email from ${message.getFrom()}`;
+	var notifText = (decision && decision.notification_text) ||
+		(draftResult && draftResult.draft_text ? `Draft prepared: ${draftResult.draft_text.substring(0, 100)}...` : `Action required for email from ${message.getFrom()}`);
 
 	var options = {
 		'method': 'post',
@@ -287,14 +317,37 @@ function callWebhook(decision, message) {
 		options.method = 'get';
 		// No payload for URL param mode, just hitting the URL
 	} else {
-		// Default to JSON
+		// Default to JSON - Flat non-nested object
 		var payload = {
-			messageId: message.getId(),
+			id: message.getId(),
 			subject: message.getSubject(),
 			sender: message.getFrom(),
-			geminiOutput: decision,
 			timestamp: new Date().toISOString()
 		};
+
+		if (decision) {
+			if (decision.importance !== undefined) payload.importance = decision.importance;
+			if (decision.notify !== undefined) payload.notify = decision.notify;
+			if (decision.notification_text !== undefined) payload.notification_text = decision.notification_text;
+			if (decision.reason !== undefined) payload.reason = decision.reason;
+			if (decision.needs_full_thread !== undefined) payload.needs_full_thread = decision.needs_full_thread;
+			if (decision.abstain_reason !== undefined) payload.abstain_reason = decision.abstain_reason;
+		}
+
+		if (draftResult) {
+			if (draftResult.draft_text !== undefined && draftResult.draft_text !== null) {
+				payload.draft_text = draftResult.draft_text;
+			}
+			if (draftResult.needs_full_thread !== undefined) {
+				payload.needs_full_thread = draftResult.needs_full_thread;
+			}
+			if (draftResult.abstain_reason !== undefined && draftResult.abstain_reason !== null) {
+				payload.abstain_reason = draftResult.abstain_reason;
+			}
+			// Message draft object as string (as metadata)
+			payload.metadata = typeof draftResult === 'string' ? draftResult : JSON.stringify(draftResult);
+		}
+
 		options.contentType = 'application/json';
 		options.payload = JSON.stringify(payload);
 	}

@@ -43,7 +43,8 @@ var PROMPTS = {
         "draft_reply": true | false,
         "notify": true | false,
         "notification_text": "Short alert text if notify is true",
-        "reason": "Short explanation of your decisions"
+        "reason": "Short explanation of your decisions",
+        "needs_full_thread": true | false
       }
     }
   `,
@@ -64,12 +65,16 @@ var PROMPTS = {
     - NO AI TELLALES: Do NOT use words like "delve", "tapestry", "complex landscape", "ensure", "kindly".
     - BE BRIEF: Executives write short, direct emails. No fluff. 8th grade reading level.
     - NO WEIRD FORMATTING: Do not use bold/markdown in the email body unless explicitly necessary.
+    - ABSTAINING: If there is insufficient context to formulate a proper response or drafting a reply is inappropriate, set draft_text to null and specify abstain_reason.
+    - FULL THREAD NEEDED: Set needs_full_thread to true if prior conversation history in the thread is required to draft an accurate response.
 
     OUTPUT FORMAT:
     Return strictly JSON:
     {
       "msg_id": {
-        "draft_text": "The draft reply body",
+        "draft_text": "The draft reply body, or null if abstaining",
+        "abstain_reason": "Reason for abstaining from drafting, if applicable",
+        "needs_full_thread": true | false,
         "reason": "Reason for the drafted text"
       }
     }

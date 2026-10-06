@@ -10,7 +10,7 @@ function testConfiguration() {
 	Logger.log("Draft Model: " + CONFIG.GEMINI_MODEL_DRAFT);
 	Logger.log("Trello Label: " + CONFIG.TRELLO_LABEL);
 	Logger.log("Enable Context: " + CONFIG.ENABLE_CONTEXT);
-	Logger.log("Enable Drafting: " + CONFIG.ENABLE_DRAFTING);
+	Logger.log("Write Drafts Mode: " + (CONFIG.WRITE_DRAFTS || CONFIG.DRAFT_MODE || CONFIG.ENABLE_DRAFTING));
 	Logger.log("Enable Destructive Actions: " + CONFIG.ENABLE_DESTRUCTIVE_ACTIONS);
 }
 
@@ -85,14 +85,23 @@ function testWebhook() {
 	// Mock Decision
 	var mockDecision = {
 		importance: "STAR",
-		draft_reply: false,
+		draft_reply: true,
 		notify: true,
 		notification_text: "This is a test notification from the Triage Agent.",
-		reason: "Testing webhook functionality."
+		reason: "Testing webhook functionality.",
+		needs_full_thread: false
+	};
+
+	// Mock Draft Result
+	var mockDraftResult = {
+		draft_text: "Hi there,\n\nThanks for reaching out! I will look into this.\n\nBest,\nNik",
+		reason: "Drafted reply based on test prompt",
+		abstain_reason: null,
+		needs_full_thread: false
 	};
 
 	// Call the actual helper function from Main.js
-	callWebhook(mockDecision, mockMessage);
+	callWebhook(mockDecision, mockMessage, mockDraftResult);
 	Logger.log("Webhook call initiated. Check logs above for success/error.");
 }
 
