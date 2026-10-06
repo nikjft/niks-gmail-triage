@@ -111,3 +111,18 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+## Queue sheet and config loader
+
+Every triage decision is also written to the shared queue sheet (google-sheet-mcp webhook), the same sheet the Slack and Trello tools use.
+
+- STAR with a draft or action reason code -> `Queue` tab, Kind Action (tier Now if notify, else At Risk).
+- STAR otherwise -> Kind Brief (Now if notify, else Later). UNSURE -> Kind Brief, Later.
+- NEITHER, ARCHIVE, BLOCK -> `Triage_Log` tab, Kind Log, Status Ignored.
+- Card Key is `gmail:<threadId>`. The webhook is insert-only, so the newest row per Card Key is current.
+- If the sheet write fails, `LAST_PROCESSED_TIMESTAMP` does not advance and the window retries. After 3 failed runs in a row the tool gives up on those rows, logs it, and sends an alert through `WEBHOOK_URL`.
+- Switches in `Config.js`: `ENABLE_QUEUE_SINK`, `QUEUE_DRY_RUN`, `QUEUE_SHEET`, `LOG_SHEET`, `LOG_IGNORED`, `DOMAIN_ENTITY_MAP`.
+- Troubleshooting: `diagnoseQueue`, `testQueueSink`, `resetQueueSeen`. Every log line carries the subject, sender and thread id.
+
+Setup: put the header from `docs/queue-sheet-header.csv` in row 1 of both tabs. Push with clasp. Fill `runConfig.js` in the editor (GEMINI_API_KEY, QUEUE_WEBHOOK_URL, QUEUE_API_KEY, optional WEBHOOK_URL), run `runConfig`, then delete the file or push the empty version over it. `Util.js` and `QueueSink.js` are shared byte-for-byte with the Slack and Trello repos.
+
+Offline test: `node test/offline.test.js`.

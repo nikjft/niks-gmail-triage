@@ -13,6 +13,17 @@ var CONFIG = {
 	WEBHOOK_MODE: 'URL_PARAM',
 	WEBHOOK_PARAM_NAME: 'message',
 
+	// ---------------- QUEUE SHEET ----------------
+	// Decisions are written to the queue sheet through the google-sheet-mcp webhook.
+	// Script Properties QUEUE_WEBHOOK_URL and QUEUE_API_KEY are set by runConfig.
+	ENABLE_QUEUE_SINK: true,   // false = labels only, no sheet writes
+	QUEUE_DRY_RUN: false,      // true = log what would be written, send nothing
+	QUEUE_SHEET: 'Queue',      // STAR and UNSURE decisions
+	LOG_SHEET: 'Triage_Log',   // NEITHER, ARCHIVE and BLOCK decisions
+	LOG_IGNORED: true,         // false = skip the log tab
+	DOMAIN_ENTITY_MAP: {       // sender domain or full address -> Entity column. Example: 'acme.com': 'Acme'
+	},
+
 	// ---------------- TUNING ----------------
 	// UPDATED: Defaults to 'gemini-3-flash'
 	// ---------------- TUNING ----------------

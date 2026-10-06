@@ -88,14 +88,14 @@ function processIncomingMail() {
 
 		// --- FILTER 1: Skip threads whose last message is from user (and expire stale drafts once replied) ---
 		if (isMessageFromUser(lastMsg)) {
-			Logger.log(`Skipping thread ${thread.getId()}: last message is from user. Expiring stale drafts.`);
+			Logger.log(`SKIP ${emailTag(null, lastMsg, thread)} reason=last_message_from_user (expiring stale drafts)`);
 			expireStaleDraftsForThread(thread);
 			continue;
 		}
 
 		// --- FILTER 2: Deterministic skip for EXCLUDED_DOMAINS before any model call ---
 		if (isSenderExcluded(lastMsg.getFrom())) {
-			Logger.log(`Skipping thread ${thread.getId()}: sender "${lastMsg.getFrom()}" matches EXCLUDED_DOMAINS.`);
+			Logger.log(`SKIP ${emailTag(null, lastMsg, thread)} reason=excluded_domain`);
 			continue;
 		}
 
@@ -130,6 +130,11 @@ function processIncomingMail() {
 		};
 	}
 
+	// Trace table: ties each msg_N to its subject, sender and thread before any model call.
+	stage1Batch.forEach(function (b) {
+		Logger.log(`STAGE1 INPUT ${emailTag(b.id, threadMap[b.id].message, threadMap[b.id].thread)} labels=[${b.labels.join(',')}] FACTS: ${b.facts}`);
+	});
+
 	// 4. CALL STAGE 1 (Triage)
 	// Uses the lightweight context and lightweight model
 	var triageDecisions = {};
@@ -148,15 +153,21 @@ function processIncomingMail() {
 
 	// 5. Execute Triage Actions & Identify Draft Candidates
 	var draftCandidates = []; // Array of { id, ... }
+	var queueItems = [];  // Decisions to write to the queue sheet
+	var draftInfo = {};   // msgId -> { text, id } for drafts that were created
 
 	for (var msgId in triageDecisions) {
 		var threadObj = threadMap[msgId];
 
 		if (!threadObj) continue;
 
-		var decision = normalizeDecision(triageDecisions[msgId], threadObj.facts);
+		var tag = emailTag(msgId, threadObj.message, threadObj.thread);
+		var rawDecision = triageDecisions[msgId];
+		var decision = normalizeDecision(rawDecision, threadObj.facts, tag);
 
-		Logger.log(`Stage 1 Decision for ${msgId}: ${decision.importance}, Draft: ${decision.draft_reply}, Notify: ${decision.notify}, Code: ${decision.reason_code || '-'}, Conf: ${decision.confidence || '-'}, FullThread: ${decision.needs_full_thread === true}`);
+		queueItems.push({ msgId: msgId, decision: decision, threadObj: threadObj });
+
+		Logger.log(`DECISION ${tag} importance=${decision.importance} draft=${decision.draft_reply} notify=${decision.notify} code=${decision.reason_code || '-'} conf=${decision.confidence || '-'} full_thread=${decision.needs_full_thread === true} | reason: ${decision.reason || '-'}`);
 
 		var thread = threadObj.thread;
 		var message = threadObj.message;
@@ -219,9 +230,16 @@ function processIncomingMail() {
 			}
 
 		} catch (e) {
-			Logger.log(`Error processing ${msgId}: ${e.toString()}`);
+			Logger.log(`ERROR processing ${tag}: ${e.toString()}`);
 		}
 	}
+
+	// Any email the model returned nothing for gets no action. Say so, with the subject.
+	stage1Batch.forEach(function (b) {
+		if (!triageDecisions[b.id]) {
+			Logger.log(`NO DECISION ${emailTag(b.id, threadMap[b.id].message, threadMap[b.id].thread)} (model returned nothing for this id)`);
+		}
+	});
 
 	// 6. CALL STAGE 2 (Drafting) - Only if enabled and needed
 	if (draftCandidates.length > 0) {
@@ -245,7 +263,7 @@ function processIncomingMail() {
 					var threadObj = threadMap[msgId];
 
 					if (draftResult && !draftResult.draft_text) {
-						Logger.log(`Draft abstained for ${msgId}: ${draftResult.abstain_reason || 'no reason given'}`);
+						Logger.log(`DRAFT ABSTAIN ${emailTag(msgId, threadMap[msgId] && threadMap[msgId].message, threadMap[msgId] && threadMap[msgId].thread)} reason: ${draftResult.abstain_reason || 'no reason given'}`);
 						continue;
 					}
 
@@ -253,12 +271,12 @@ function processIncomingMail() {
 						if (CONFIG.ENABLE_DRAFT_LINT !== false) {
 							var lintProblems = lintDraft(draftResult.draft_text);
 							if (lintProblems.length > 0) {
-								Logger.log(`Draft rejected by lint for ${msgId}: ${lintProblems.join(' | ')}`);
+								Logger.log(`DRAFT LINT FAIL ${emailTag(msgId, threadObj.message, threadObj.thread)} ${lintProblems.join(' | ')}`);
 								continue;
 							}
 						}
 						if (threadHasDraft(threadObj.thread)) {
-							Logger.log(`Draft skipped for ${msgId}: thread already has a draft.`);
+							Logger.log(`DRAFT SKIP ${emailTag(msgId, threadObj.message, threadObj.thread)} thread already has a draft`);
 							continue;
 						}
 						try {
@@ -266,14 +284,26 @@ function processIncomingMail() {
 							var htmlBody = constructQuotedReply(threadObj.message, draftResult.draft_text);
 
 							// Create Draft with HTML support, excluding self from recipients
-							createDraftReplyAllExcludingSelf(threadObj.thread, threadObj.message, htmlBody);
-							Logger.log(`Draft created for ${msgId}`);
+							var createdDraft = createDraftReplyAllExcludingSelf(threadObj.thread, threadObj.message, htmlBody);
+							var draftId = '';
+							try { draftId = createdDraft ? createdDraft.getId() : ''; } catch (de) { }
+							draftInfo[msgId] = { text: draftResult.draft_text, id: draftId };
+							Logger.log(`DRAFT CREATED ${emailTag(msgId, threadObj.message, threadObj.thread)} asks_covered=${JSON.stringify(draftResult.asks_covered || [])}`);
 						} catch (e) {
-							Logger.log(`Error creating draft for ${msgId}: ${e.toString()}`);
+							Logger.log(`DRAFT ERROR ${emailTag(msgId, threadObj.message, threadObj.thread)}: ${e.toString()}`);
 						}
 					}
 				}
 			}
+		}
+	}
+
+	// 7. Write decisions to the queue sheet. If the sink fails, keep the timestamp so the run retries.
+	if (typeof flushQueue_ === 'function' && queueConfigured_()) {
+		var flushed = flushQueue_(queueItems, draftInfo);
+		if (!flushed) {
+			Logger.log('Queue sink failed. LAST_PROCESSED_TIMESTAMP NOT updated; this window will be retried.');
+			return;
 		}
 	}
 
@@ -407,6 +437,26 @@ function buildHistoryForDraft(allMessages) {
 	}).join('\n    ---\n');
 }
 
+/**
+ * One-line trace tag for logs: msg id, subject, sender, thread id.
+ * Subject is cut at 80 characters and stripped of line breaks.
+ * @param {String|null} msgId
+ * @param {GmailMessage} message
+ * @param {GmailThread} thread
+ * @return {String}
+ */
+function emailTag(msgId, message, thread) {
+	var subject = '';
+	var from = '';
+	var threadId = '';
+	try { subject = (message && message.getSubject()) || ''; } catch (e) { }
+	try { from = (message && message.getFrom()) || ''; } catch (e) { }
+	try { threadId = (thread && thread.getId()) || ''; } catch (e) { }
+	subject = subject.replace(/\s+/g, ' ').trim();
+	if (subject.length > 80) subject = subject.substring(0, 80) + '...';
+	return '[' + (msgId || '-') + ' | "' + subject + '" | ' + from + ' | thread ' + threadId + ']';
+}
+
 // ---------------------------------------------------------------------------
 // DECISION SAFETY
 // ---------------------------------------------------------------------------
@@ -421,24 +471,30 @@ function buildHistoryForDraft(allMessages) {
  * @param {Object} facts
  * @return {Object}
  */
-function normalizeDecision(d, facts) {
+function normalizeDecision(d, facts, tag) {
+	tag = tag || '';
 	var out = d && typeof d === 'object' ? d : {};
 	var valid = ['STAR', 'NEITHER', 'ARCHIVE', 'BLOCK', 'UNSURE'];
 	if (valid.indexOf(out.importance) === -1) {
+		Logger.log('OVERRIDE ' + tag + ' importance "' + out.importance + '" is not valid -> UNSURE.');
 		out.importance = 'UNSURE';
 		out.reason_code = out.reason_code || 'THIN_PREVIEW';
 	}
 	if ((out.importance === 'ARCHIVE' || out.importance === 'BLOCK') &&
 		(out.confidence === 'low' || out.needs_full_thread === true)) {
-		Logger.log('Downgraded ' + out.importance + ' to UNSURE (low confidence or needs full thread).');
+		Logger.log('OVERRIDE ' + tag + ' ' + out.importance + ' -> UNSURE (low confidence or needs full thread).');
 		out.importance = 'UNSURE';
 	}
 	if (out.importance === 'STAR' && out.reason_code === 'THIN_PREVIEW') {
-		Logger.log('Downgraded STAR to UNSURE (reason_code THIN_PREVIEW contradicts STAR).');
+		Logger.log('OVERRIDE ' + tag + ' STAR -> UNSURE (reason_code THIN_PREVIEW contradicts STAR).');
 		out.importance = 'UNSURE';
 	}
+	var draftBefore = out.draft_reply === true;
 	if (out.importance !== 'STAR') out.draft_reply = false;
 	if (facts && facts.last_from_nik) out.draft_reply = false;
+	if (draftBefore && out.draft_reply !== true) {
+		Logger.log('OVERRIDE ' + tag + ' draft true -> false (importance ' + out.importance + ' or last message from Nik).');
+	}
 	if (out.importance === 'ARCHIVE' || out.importance === 'BLOCK') out.notify = false;
 	out.draft_reply = out.draft_reply === true;
 	out.notify = out.notify === true;
@@ -508,6 +564,36 @@ function callWebhook(decision, message) {
 		Logger.log(`Webhook Sent: ${response.getResponseCode()}`);
 	} catch (e) {
 		Logger.log(`Webhook Error: ${e.toString()}`);
+	}
+}
+
+// Sends a plain-text alert through the configured webhook (honors WEBHOOK_MODE). Used for queue sink alerts.
+function sendTextWebhook_(text) {
+	if (!CONFIG.WEBHOOK_URL || CONFIG.WEBHOOK_URL.indexOf('http') === -1 || CONFIG.WEBHOOK_URL.includes('YOUR_WEBHOOK_URL')) {
+		Logger.log('Alert webhook skipped (URL not configured): ' + text);
+		return false;
+	}
+	var mode = CONFIG.WEBHOOK_MODE || 'JSON';
+	var paramName = CONFIG.WEBHOOK_PARAM_NAME || 'message';
+	var url = CONFIG.WEBHOOK_URL;
+	var options = { method: 'post', muteHttpExceptions: true };
+	if (mode === 'TEXT') {
+		options.contentType = 'text/plain';
+		options.payload = text;
+	} else if (mode === 'URL_PARAM') {
+		url = url + (url.indexOf('?') !== -1 ? '&' : '?') + paramName + '=' + encodeURIComponent(text);
+		options.method = 'get';
+	} else {
+		options.contentType = 'application/json';
+		options.payload = JSON.stringify({ subject: 'Gmail triage alert', sender: 'niks-gmail-triage', geminiOutput: { notification_text: text }, timestamp: new Date().toISOString() });
+	}
+	try {
+		var r = UrlFetchApp.fetch(url, options);
+		Logger.log('Alert webhook sent: ' + r.getResponseCode());
+		return true;
+	} catch (e) {
+		Logger.log('Alert webhook error: ' + e.toString());
+		return false;
 	}
 }
 
@@ -680,7 +766,7 @@ function createDraftReplyAllExcludingSelf(thread, originalMessage, htmlBody) {
 		subject = "Re: " + subject;
 	}
 
-	GmailApp.createDraft(toField, subject, "", options);
+	return GmailApp.createDraft(toField, subject, "", options);
 }
 
 

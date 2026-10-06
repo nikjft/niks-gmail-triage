@@ -1,0 +1,3 @@
+# clasp config and credentials. Never commit.
+.clasp.json
+.clasprc.json
