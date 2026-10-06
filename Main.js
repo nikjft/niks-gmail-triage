@@ -110,18 +110,23 @@ function processIncomingMail() {
 		// 2. Draft Context (Stage 2): Larger limit
 		var cleanBodyDraft = cleanEmailBody(rawBody, CONFIG.MAX_DRAFT_BODY_CHARS || 3000);
 
+		var facts = buildFacts(allMessages, lastMsg);
+
 		stage1Batch.push({
 			id: msgId,
 			from: lastMsg.getFrom(),
 			subject: lastMsg.getSubject(),
 			body: cleanBodyTriage, // LIGHTWEIGHT (Triage Limit)
+			facts: factsToString(facts),
 			labels: thread.getLabels().map(l => l.getName())
 		});
 
 		threadMap[msgId] = {
 			thread: thread,
 			message: lastMsg,
-			fullBody: cleanBodyDraft // FULL CONTEXT (Draft Limit)
+			fullBody: cleanBodyDraft, // FULL CONTEXT (Draft Limit)
+			facts: facts,
+			history: buildHistoryForDraft(allMessages)
 		};
 	}
 
@@ -147,12 +152,13 @@ function processIncomingMail() {
 	var notificationsToSend = {}; // Map of msgId -> boolean
 
 	for (var msgId in triageDecisions) {
-		var decision = triageDecisions[msgId];
 		var threadObj = threadMap[msgId];
 
 		if (!threadObj) continue;
 
-		Logger.log(`Stage 1 Decision for ${msgId}: ${decision.importance}, Draft: ${decision.draft_reply}`);
+		var decision = normalizeDecision(triageDecisions[msgId], threadObj.facts);
+
+		Logger.log(`Stage 1 Decision for ${msgId}: ${decision.importance}, Draft: ${decision.draft_reply}, Notify: ${decision.notify}, Code: ${decision.reason_code || '-'}, Conf: ${decision.confidence || '-'}, FullThread: ${decision.needs_full_thread === true}`);
 
 		var thread = threadObj.thread;
 		var message = threadObj.message;
@@ -209,7 +215,9 @@ function processIncomingMail() {
 						id: msgId,
 						from: message.getFrom(),
 						subject: message.getSubject(),
-						body: threadObj.fullBody // FULL CONTEXT
+						body: threadObj.fullBody, // FULL CONTEXT
+						facts: factsToString(threadObj.facts),
+						history: threadObj.history
 					});
 				} else {
 					Logger.log(`Drafting mode is NONE. Tagged ${msgId} for draft but skipping draft generation.`);
@@ -239,7 +247,23 @@ function processIncomingMail() {
 				var draftResult = draftDecisions[msgId];
 				var threadObj = threadMap[msgId];
 
+				if (draftResult && !draftResult.draft_text) {
+					Logger.log(`Draft abstained for ${msgId}: ${draftResult.abstain_reason || 'no reason given'}`);
+					continue;
+				}
+
 				if (draftResult && draftResult.draft_text && threadObj) {
+					if (CONFIG.ENABLE_DRAFT_LINT !== false) {
+						var lintProblems = lintDraft(draftResult.draft_text);
+						if (lintProblems.length > 0) {
+							Logger.log(`Draft rejected by lint for ${msgId}: ${lintProblems.join(' | ')}`);
+							continue;
+						}
+					}
+					if (threadHasDraft(threadObj.thread)) {
+						Logger.log(`Draft skipped for ${msgId}: thread already has a draft.`);
+						continue;
+					}
 					try {
 						// Construct HTML Body with Quoted History
 						var htmlBody = constructQuotedReply(threadObj.message, draftResult.draft_text);
@@ -285,6 +309,186 @@ function processIncomingMail() {
 	// Save timestamp for next run
 	scriptProperties.setProperty('LAST_PROCESSED_TIMESTAMP', runTimestamp.toString());
 	Logger.log(`Updated LAST_PROCESSED_TIMESTAMP to: ${runTimestamp}`);
+}
+
+
+// ---------------------------------------------------------------------------
+// FACTS (ground truth for the triage prompt). Computed from headers, never by the model.
+// ---------------------------------------------------------------------------
+
+/**
+ * True when the address belongs to a configured internal domain (mcgaw.io).
+ * @param {String} email
+ * @return {Boolean}
+ */
+function isInternalEmail(email) {
+	if (!email) return false;
+	var domains = CONFIG.INTERNAL_DOMAINS || [];
+	var clean = email.toLowerCase().trim();
+	return domains.some(function (d) {
+		return clean.endsWith('@' + d.toLowerCase());
+	});
+}
+
+/**
+ * Splits a header like "A <a@x.com>, b@y.com" into lowercase addresses.
+ * @param {String} headerVal
+ * @return {Array<String>}
+ */
+function headerEmails(headerVal) {
+	if (!headerVal) return [];
+	return headerVal.split(',').map(function (p) { return extractSingleEmail(p); }).filter(function (e) { return e; });
+}
+
+/**
+ * Builds the FACTS object for a thread.
+ * teammate_replied_after_external: an internal, non-Nik sender wrote after the latest external message.
+ * @param {Array<GmailMessage>} allMessages
+ * @param {GmailMessage} lastMsg
+ * @return {Object}
+ */
+function buildFacts(allMessages, lastMsg) {
+	var facts = {
+		last_from_nik: false,
+		nik_in_to: false,
+		nik_in_cc: false,
+		nik_sent_in_thread: false,
+		last_from_internal: false,
+		all_internal: true,
+		msg_count: allMessages.length,
+		teammate_replied_after_external: false,
+		has_list_unsubscribe: false
+	};
+	try {
+		facts.last_from_nik = isMessageFromUser(lastMsg);
+		facts.last_from_internal = isInternalEmail(extractSingleEmail(lastMsg.getFrom()));
+		facts.nik_in_to = headerEmails(lastMsg.getTo()).some(isUserEmail);
+		facts.nik_in_cc = headerEmails(lastMsg.getCc()).some(isUserEmail);
+
+		var lastExternalIdx = -1;
+		allMessages.forEach(function (msg, idx) {
+			var from = extractSingleEmail(msg.getFrom());
+			if (isUserEmail(from)) facts.nik_sent_in_thread = true;
+			var internal = isInternalEmail(from) || isUserEmail(from);
+			if (!internal) {
+				facts.all_internal = false;
+				lastExternalIdx = idx;
+			}
+		});
+		if (facts.all_internal) {
+			// Recipients count too: an external To or Cc makes the thread external.
+			var recips = headerEmails(lastMsg.getTo()).concat(headerEmails(lastMsg.getCc()));
+			facts.all_internal = recips.every(function (e) { return isInternalEmail(e) || isUserEmail(e); });
+		}
+		if (lastExternalIdx >= 0) {
+			for (var i = lastExternalIdx + 1; i < allMessages.length; i++) {
+				var f = extractSingleEmail(allMessages[i].getFrom());
+				if (isInternalEmail(f) && !isUserEmail(f)) {
+					facts.teammate_replied_after_external = true;
+					break;
+				}
+			}
+		}
+		facts.has_list_unsubscribe = hasListUnsubscribe(lastMsg);
+	} catch (e) {
+		Logger.log('buildFacts error: ' + e.toString());
+	}
+	return facts;
+}
+
+/**
+ * Checks the raw header block for List-Unsubscribe. GmailMessage has no getHeader, so read the raw header section.
+ * @param {GmailMessage} msg
+ * @return {Boolean}
+ */
+function hasListUnsubscribe(msg) {
+	try {
+		var raw = msg.getRawContent();
+		var headerEnd = raw.search(/\r?\n\r?\n/);
+		var headers = headerEnd > 0 ? raw.substring(0, headerEnd) : raw.substring(0, 8000);
+		return /^list-unsubscribe:/im.test(headers);
+	} catch (e) {
+		return false;
+	}
+}
+
+/**
+ * @param {Object} facts
+ * @return {String} "k=v; k=v" line for the prompt
+ */
+function factsToString(facts) {
+	if (!facts) return '';
+	return Object.keys(facts).map(function (k) { return k + '=' + facts[k]; }).join('; ');
+}
+
+/**
+ * Compact history for drafting. Marks each message SENT (by Nik) or RECEIVED so the model
+ * can tell which asks Nik already answered. Newest message is excluded, it is sent as the body.
+ * @param {Array<GmailMessage>} allMessages
+ * @return {String}
+ */
+function buildHistoryForDraft(allMessages) {
+	var prior = allMessages.slice(0, -1).slice(-4);
+	return prior.map(function (msg) {
+		var who = isMessageFromUser(msg) ? 'SENT BY NIK' : 'RECEIVED from ' + msg.getFrom();
+		var body = cleanEmailBody(msg.getPlainBody(), 600);
+		return '    [' + who + '] ' + body.replace(/\n/g, '\n    ');
+	}).join('\n    ---\n');
+}
+
+// ---------------------------------------------------------------------------
+// DECISION SAFETY
+// ---------------------------------------------------------------------------
+
+/**
+ * Cleans one Stage 1 decision. Never lets a doubtful or malformed answer cause a quiet loss:
+ *   - unknown importance becomes UNSURE
+ *   - ARCHIVE or BLOCK with low confidence or needs_full_thread becomes UNSURE
+ *   - draft_reply is forced false when facts show the last message is from Nik
+ *   - draft_reply is forced false unless importance is STAR
+ * @param {Object} d
+ * @param {Object} facts
+ * @return {Object}
+ */
+function normalizeDecision(d, facts) {
+	var out = d && typeof d === 'object' ? d : {};
+	var valid = ['STAR', 'NEITHER', 'ARCHIVE', 'BLOCK', 'UNSURE'];
+	if (valid.indexOf(out.importance) === -1) {
+		out.importance = 'UNSURE';
+		out.reason_code = out.reason_code || 'THIN_PREVIEW';
+	}
+	if ((out.importance === 'ARCHIVE' || out.importance === 'BLOCK') &&
+		(out.confidence === 'low' || out.needs_full_thread === true)) {
+		Logger.log('Downgraded ' + out.importance + ' to UNSURE (low confidence or needs full thread).');
+		out.importance = 'UNSURE';
+	}
+	if (out.importance === 'STAR' && out.reason_code === 'THIN_PREVIEW') {
+		Logger.log('Downgraded STAR to UNSURE (reason_code THIN_PREVIEW contradicts STAR).');
+		out.importance = 'UNSURE';
+	}
+	if (out.importance !== 'STAR') out.draft_reply = false;
+	if (facts && facts.last_from_nik) out.draft_reply = false;
+	if (out.importance === 'ARCHIVE' || out.importance === 'BLOCK') out.notify = false;
+	out.draft_reply = out.draft_reply === true;
+	out.notify = out.notify === true;
+	return out;
+}
+
+/**
+ * True when the thread already holds a draft. Stops duplicate drafts across retries.
+ * @param {GmailThread} thread
+ * @return {Boolean}
+ */
+function threadHasDraft(thread) {
+	try {
+		var id = thread.getId();
+		return GmailApp.getDrafts().some(function (d) {
+			try { return d.getMessage().getThread().getId() === id; } catch (e) { return false; }
+		});
+	} catch (e) {
+		Logger.log('threadHasDraft error: ' + e.toString());
+		return false;
+	}
 }
 
 // Helper: Call Generic Webhook

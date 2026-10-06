@@ -34,6 +34,12 @@ var CONFIG = {
 	// 'WEBHOOK' - Send draft and abstain_reason to webhook, nowhere else
 	WRITE_DRAFTS: 'WEBHOOK',
 
+	// Domains treated as internal (McGaw staff). Used for the FACTS line.
+	INTERNAL_DOMAINS: ['mcgaw.io'],
+
+	// Draft lint: if true, drafts that break voice rules are skipped and logged, not saved.
+	ENABLE_DRAFT_LINT: true,
+
 	// How many emails to process per execution (keep low to avoid timeout)
 	MAX_EMAILS_TO_PROCESS: 30,
 
