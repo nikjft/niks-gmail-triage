@@ -136,3 +136,17 @@ Every triage decision is also written to the shared queue sheet (google-sheet-mc
 Setup: put the header from `docs/queue-sheet-header.csv` in row 1 of both tabs. Push with clasp. Fill `runConfig.js` in the editor (GEMINI_API_KEY, QUEUE_WEBHOOK_URL, QUEUE_API_KEY, optional WEBHOOK_URL), run `runConfig`, then delete the file or push the empty version over it. `Util.js` and `QueueSink.js` are shared byte-for-byte with the Slack and Trello repos.
 
 Offline test: `node test/offline.test.js`.
+
+## Staleness sweep
+
+`runGmailStalenessSweep` closes queue rows that no longer need Nik. It is separate from the collector, so schedule it on its own trigger (`setupStalenessTrigger` installs a daily one at `CONFIG.SWEEP.TRIGGER_HOUR`). Deterministic. No Gemini. Read-only against Gmail.
+
+Closes an open Gmail row when the last message in the thread (drafts ignored) is from Nik or an alias, when the thread is archived and not starred. A Gmail draft on a closed row is left in place.
+
+Rules for every channel:
+- Snoozed rows are never touched. So are rows with a Lease, Manual rows, Log rows and collector gate rows (`needs-help:`).
+- When a row closes, every open queued next step under it (`Parent` = its `_uid`, any channel, recursively) closes too, so it is never processed. Snoozed and leased next steps are left alone.
+- A closed row gets `Status = Done`, `Closed At` and `Closeout = "stale sweep: <reason>"` in one `update_row`. Nothing is deleted.
+- It reads and writes the sheet through the google-sheet-mcp JSON-RPC endpoint (`QueueStore.js`, shared byte-identical by the three triage repos), using the same `QUEUE_WEBHOOK_URL` and `QUEUE_API_KEY`.
+- Each run examines up to `SWEEP.MAX_ROWS_PER_RUN` rows within `SWEEP.RUN_BUDGET_MS`. The rest carry to the next run through a cursor, so every row is eventually checked.
+- `runGmailStalenessSweepDry` logs what would close and writes nothing. Offline tests: `node test/sweep.test.js`.

@@ -24,6 +24,16 @@ var CONFIG = {
 	DOMAIN_ENTITY_MAP: {       // sender domain or full address -> Entity column. Example: 'acme.com': 'Acme'
 	},
 
+	// ---------------- STALENESS SWEEP ----------------
+	// runGmailStalenessSweep runs on its own schedule, separate from processIncomingMail.
+	SWEEP: {
+		DRY_RUN: false,            // true = log what would close, write nothing
+		RUN_BUDGET_MS: 270000,
+		MAX_ROWS_PER_RUN: 150,     // rows beyond this carry to the next run through a cursor
+		MIN_ROW_AGE_HOURS: 0,      // skip rows newer than this
+		TRIGGER_HOUR: 5            // setupStalenessTrigger fires daily at about this hour (Denver)
+	},
+
 	// ---------------- TUNING ----------------
 	// UPDATED: Defaults to 'gemini-3-flash'
 	// ---------------- TUNING ----------------
