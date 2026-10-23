@@ -1,7 +1,7 @@
 /**
  * Prompts for the Gmail triage agent.
  *
- * PROMPTS_VERSION 2026-10-05
+ * PROMPTS_VERSION 2026-10-23
  * Distilled from the Notion skill library. Notion is canonical. If these drift, Notion wins:
  *   - Triage rules:  email-triage "Classification Rubric" (edited 2026-09-26) and Email Triage skill (edited 2026-10-02)
  *   - Voice rules:   nik-context (edited 2026-10-01) and Brand Voice (edited 2026-09-26)
@@ -12,7 +12,7 @@
  * (ENABLE_DRAFTING = false) because Queue Processor drafts downstream. Keep this prompt in sync anyway
  * so the script can draft if it is ever turned back on.
  */
-var PROMPTS_VERSION = "2026-10-05";
+var PROMPTS_VERSION = "2026-10-23";
 
 var PROMPTS = {
   TRIAGE: `
@@ -58,7 +58,7 @@ If a fact you need for these gates is missing, set draft_reply to false and need
 STEP 3. NOTIFY (true or false)
 True only when the message is genuinely urgent or time-sensitive: a deadline inside about two days, an escalation, an angry client, an outage, an expiring signature. Decide on urgency alone. Do NOT set notify just because draft_reply is true. Always false for ARCHIVE and BLOCK.
 
-FACTS keys you may see: last_from_nik, nik_in_to, nik_in_cc, nik_sent_in_thread, last_from_internal, all_internal, msg_count, teammate_replied_after_external, has_list_unsubscribe. A list-unsubscribe header means bulk mail: ARCHIVE unless it is clearly a transactional notice about McGaw business.
+FACTS keys you may see: last_from_nik, nik_in_to, nik_in_cc, nik_sent_in_thread, last_from_internal, all_internal, msg_count, teammate_replied_after_external, has_list_unsubscribe, prior_contact. prior_contact=false means neither Nik nor a teammate has ever written to this sender or their company. Such a sender is not an active deal or a client: never use ACTIVE_DEAL_SIGNAL or CLIENT_ISSUE for them. Familiar-sounding openers ("quick word", "heard about you from Brian", "following up on my note", "our CEO asked me to reach out") with prior_contact=false are cold outreach: ARCHIVE, or BLOCK for lead generation. A list-unsubscribe header means bulk mail: ARCHIVE unless it is clearly a transactional notice about McGaw business.
 
 EXAMPLES
 1. A McGaw teammate confirms an active prospect moved its proposal review. No ask of Nik. -> STAR, draft_reply false, notify false, ACTIVE_DEAL_SIGNAL.

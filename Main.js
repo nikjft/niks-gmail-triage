@@ -394,7 +394,8 @@ function buildFacts(allMessages, lastMsg) {
 		all_internal: true,
 		msg_count: allMessages.length,
 		teammate_replied_after_external: false,
-		has_list_unsubscribe: false
+		has_list_unsubscribe: false,
+		prior_contact: true
 	};
 	try {
 		facts.last_from_nik = isMessageFromUser(lastMsg);
@@ -427,10 +428,35 @@ function buildFacts(allMessages, lastMsg) {
 			}
 		}
 		facts.has_list_unsubscribe = hasListUnsubscribe(lastMsg);
+		var teammateInThread = allMessages.some(function (msg) {
+			var f = extractSingleEmail(msg.getFrom());
+			return isInternalEmail(f) && !isUserEmail(f);
+		});
+		var sender = extractSingleEmail(lastMsg.getFrom());
+		facts.prior_contact = facts.nik_sent_in_thread || teammateInThread || isInternalEmail(sender) || isUserEmail(sender) || hasSentTo_(sender);
 	} catch (e) {
 		Logger.log('buildFacts error: ' + e.toString());
 	}
 	return facts;
+}
+
+/**
+ * True when Nik has sent mail to this sender before: to the full address for freemail, else to anyone at the domain.
+ * One Gmail search per sender, cached for the run. A failed search counts as contact, so it never demotes a message.
+ * @param {String} email
+ * @return {Boolean}
+ */
+var FREEMAIL_DOMAINS_ = ['gmail.com', 'googlemail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'live.com', 'icloud.com', 'me.com', 'aol.com', 'proton.me', 'protonmail.com'];
+var _sentToCache = {};
+function hasSentTo_(email) {
+	if (!email || email.indexOf('@') === -1) return true;
+	var domain = email.split('@')[1];
+	var target = FREEMAIL_DOMAINS_.indexOf(domain) !== -1 ? email : domain;
+	if (_sentToCache.hasOwnProperty(target)) return _sentToCache[target];
+	var found = true;
+	try { found = GmailApp.search('in:sent to:' + target, 0, 1).length > 0; } catch (e) { Logger.log('WARN sent search failed for ' + target + ': ' + e); }
+	_sentToCache[target] = found;
+	return found;
 }
 
 /**
@@ -524,6 +550,16 @@ function normalizeDecision(d, facts, tag) {
 	if (out.importance === 'STAR' && out.reason_code === 'THIN_PREVIEW') {
 		Logger.log('OVERRIDE ' + tag + ' STAR -> UNSURE (reason_code THIN_PREVIEW contradicts STAR).');
 		out.importance = 'UNSURE';
+	}
+	// A deal or client signal needs an existing relationship. With no contact at all (Nik or a teammate never wrote in the
+	// thread, and Nik never emailed the sender or their domain), it is a cold pitch posing as one. NEITHER keeps it in the
+	// inbox and out of the queue.
+	var NEEDS_RELATIONSHIP = ['ACTIVE_DEAL_SIGNAL', 'CLIENT_ISSUE'];
+	if (out.importance === 'STAR' && NEEDS_RELATIONSHIP.indexOf(out.reason_code) !== -1 && facts && facts.prior_contact === false) {
+		Logger.log('OVERRIDE ' + tag + ' STAR/' + out.reason_code + ' -> NEITHER/SOLICITATION (no prior contact with sender).');
+		out.importance = 'NEITHER';
+		out.reason_code = 'SOLICITATION';
+		out.notify = false;
 	}
 	var draftBefore = out.draft_reply === true;
 	if (out.importance !== 'STAR') out.draft_reply = false;
