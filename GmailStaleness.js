@@ -38,7 +38,7 @@ function gmailStaleReason_(thread, mine) {
 
 function runGmailStaleness_(opts) {
 	return runQueueSweep_({
-		label: 'Gmail', sources: ['gmail', 'email'], cursorKey: 'SWEEP_CURSOR_GMAIL', dryRun: opts.dryRun,
+		label: 'Gmail', sources: ['gmail', 'email'], collector: GMAIL_COLLECTOR_NAME_, cursorKey: 'SWEEP_CURSOR_GMAIL', dryRun: opts.dryRun,
 		check: function (rows, ctx) {
 			var mine = gmailMyAddresses_();
 			var n = 0;

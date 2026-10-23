@@ -7,7 +7,10 @@
 // Statuses the sweep may close. Snoozed is never swept (Nik parked it on purpose). Ignored and Test are not queue items.
 var SWEEP_OPEN_STATUSES_ = ['New', 'Drafted', 'Approved', 'Waiting'];
 var SWEEP_COLUMNS_ = ['_uid', 'Name', 'Source', 'Kind', 'Status', 'Reason', 'Reason Code', 'Source Ref', 'Card Key', 'Flag Key',
-	'Event Ts', 'Lease', 'Draft Ref', 'Parent', '_created_at'];
+	'Event Ts', 'Lease', 'Draft Ref', 'Parent', 'Collector', '_created_at'];
+
+// Card Key for comparison. The Gmail collector once wrote email:<threadId>.
+function sweepKey_(k) { return String(k || '').trim().replace(/^email:/, 'gmail:'); }
 
 // Calls one MCP tool. Returns {ok, data, error}. data is the parsed JSON text of the tool result.
 function queueRpc_(tool, args) {
@@ -32,9 +35,11 @@ function unwrapRef_(s) {
 }
 
 // Open rows for the given sources (case-insensitive names, e.g. ['gmail', 'email']), oldest first.
-// Reads server side by Status, then drops what the sweep never touches:
-// Log rows, rows with a Lease (a worker is mid-flight), Manual rows, and collector gate rows (Source Ref needs-help:...).
-// Returns {ok, rows, error}.
+// Reads server side by Status. Only rows the channel's own collector wrote (opts.collector) are judged directly.
+// Never judged directly: child rows (non-empty Parent, Nik's instructions), Manual rows, rows inserted by Claude or review,
+// Log rows, rows with a Lease (a worker is mid-flight), and collector gate rows (Source Ref needs-help:...).
+// Children close only through their parent (see runQueueSweep_).
+// Returns {ok, rows, children: {parentUid: [rows]}, error}.
 function queueReadOpenRows_(sources, opts) {
 	opts = opts || {};
 	var want = {};
@@ -62,6 +67,8 @@ function queueReadOpenRows_(sources, opts) {
 	});
 	rows = rows.filter(function (row) {
 		if (!want[String(row['Source'] || '').toLowerCase()]) return false;
+		if (String(row['Parent'] || '').trim()) return false;
+		if (opts.collector && String(row['Collector'] || '').trim() !== opts.collector) return false;
 		if (String(row['Kind'] || '') === 'Log') return false;
 		if (String(row['Lease'] || '').trim()) return false;
 		if (unwrapRef_(row['Source Ref']).indexOf('needs-help:') === 0) return false;
@@ -89,10 +96,12 @@ function queueCloseRow_(uid, closeout) {
 }
 
 // Shared driver. cfg = {
-//   label: 'Gmail', sources: ['gmail','email'], cursorKey: 'SWEEP_CURSOR_GMAIL',
+//   label: 'Gmail', sources: ['gmail','email'], collector: 'gmail-triage', cursorKey: 'SWEEP_CURSOR_GMAIL',
 //   check: function (rows, ctx) -> number of rows examined (rows is already rotated to start at the cursor)
 // }
-// ctx = {now, budget, report, dryRun, close(row, why), failed(row, why), kept(row, why)}.
+// ctx = {now, budget, report, dryRun, close(row, why, opts), failed(row, why), kept(row, why)}.
+// close opts.cascade (default true): also close open children on the same Card Key. Pass false when the reason does not
+// make a queued action moot (a Trello comment or a moved due date is not the action a child asks for).
 // A run examines as many rows as the budget allows. The rest carry to the next run through a cursor in Script Properties,
 // so every row is eventually checked even when one run cannot reach them all.
 function runQueueSweep_(cfg) {
@@ -101,7 +110,7 @@ function runQueueSweep_(cfg) {
 	var out = withLock_(function () {
 		var budget = makeBudget_(S.RUN_BUDGET_MS || 270000);
 		var report = { label: cfg.label, dryRun: dryRun, open: 0, examined: 0, closed: 0, failed: 0, kept: 0, reasons: {}, errors: [], carried: 0 };
-		var read = queueReadOpenRows_(cfg.sources, { minAgeHours: S.MIN_ROW_AGE_HOURS || 0 });
+		var read = queueReadOpenRows_(cfg.sources, { minAgeHours: S.MIN_ROW_AGE_HOURS || 0, collector: cfg.collector });
 		if (!read.ok) {
 			report.errors.push('read queue: ' + read.error);
 			return report;
@@ -116,28 +125,36 @@ function runQueueSweep_(cfg) {
 		var ordered = rows.slice(start).concat(rows.slice(0, start));
 		var maxRows = S.MAX_ROWS_PER_RUN || 150;
 
+		function closeOne(row, why, parentUid, cascade) {
+			var uid = row['_uid'];
+			if (closedUids[uid]) return false;
+			var label = parentUid ? 'stale sweep: parent ' + parentUid + ' closed (' + why + ')' : 'stale sweep: ' + why;
+			if (dryRun) {
+				Logger.log('DRY would close ' + uid + ' [' + oneLine_(row['Name'], 60) + '] ' + label);
+			} else {
+				var w = queueCloseRow_(uid, label);
+				if (!w.ok) { report.failed++; report.errors.push('close ' + uid + ': ' + w.error); return false; }
+				Logger.log('CLOSED ' + uid + ' [' + oneLine_(row['Name'], 60) + '] ' + label);
+			}
+			closedUids[uid] = true;
+			report.closed++;
+			if (parentUid) report.cascaded++;
+			else report.reasons[why] = (report.reasons[why] || 0) + 1;
+			if (cascade) {
+				var key = sweepKey_(row['Card Key']);
+				(children[uid] || []).forEach(function (child) {
+					if (key && sweepKey_(child['Card Key']) === key) closeOne(child, why, uid, true);
+				});
+			}
+			return true;
+		}
+
 		var ctx = {
 			now: new Date(), budget: budget, report: report, dryRun: dryRun, maxRows: maxRows,
-			// Closes the row, then every open queued next step under it (Parent = this row's _uid), recursively.
-			// Those next steps must not be processed once their source is stale. Leased and Snoozed children are left alone.
-			close: function (row, why, parentUid) {
-				var uid = row['_uid'];
-				if (closedUids[uid]) return false;
-				var label = parentUid ? 'stale sweep: parent ' + parentUid + ' closed (' + why + ')' : 'stale sweep: ' + why;
-				if (dryRun) {
-					Logger.log('DRY would close ' + uid + ' [' + oneLine_(row['Name'], 60) + '] ' + label);
-				} else {
-					var w = queueCloseRow_(uid, label);
-					if (!w.ok) { report.failed++; report.errors.push('close ' + uid + ': ' + w.error); return false; }
-					Logger.log('CLOSED ' + uid + ' [' + oneLine_(row['Name'], 60) + '] ' + label);
-				}
-				closedUids[uid] = true;
-				report.closed++;
-				if (parentUid) report.cascaded++;
-				else report.reasons[why] = (report.reasons[why] || 0) + 1;
-				(children[uid] || []).forEach(function (child) { ctx.close(child, why, uid); });
-				return true;
-			},
+			// Closes the row. With cascade, also closes every open queued next step under it (Parent = this row's _uid,
+			// recursively) that sits on the same Card Key: a queued reply to a thread or card that is already handled.
+			// Children on another channel or card are separate instructions and stay open. Leased and Snoozed children stay too.
+			close: function (row, why, opts) { return closeOne(row, why, '', !(opts && opts.cascade === false)); },
 			failed: function (row, why) { report.failed++; Logger.log('UNREADABLE ' + row['_uid'] + ': ' + why); },
 			kept: function () { report.kept++; }
 		};

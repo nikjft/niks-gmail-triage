@@ -137,6 +137,10 @@ Setup: put the header from `docs/queue-sheet-header.csv` in row 1 of both tabs. 
 
 Offline test: `node test/offline.test.js`.
 
+## Cold pitches posing as deal signals
+
+`buildFacts` adds `prior_contact`: true when Nik or a teammate wrote in the thread, or Nik has ever emailed the sender (the full address for freemail, else anyone at the domain; one cached `in:sent` search per sender, and a failed search counts as contact). `normalizeDecision` demotes STAR with `ACTIVE_DEAL_SIGNAL` or `CLIENT_ISSUE` to NEITHER / `SOLICITATION` when `prior_contact` is false: both codes need an existing relationship. NEITHER keeps the email in the inbox and out of the queue. A direct ask from a stranger (`ASK_OF_NIK`) is not demoted, so a real inbound lead still reaches the queue.
+
 ## Staleness sweep
 
 `runGmailStalenessSweep` closes queue rows that no longer need Nik. It is separate from the collector, so schedule it on its own trigger (`setupStalenessTrigger` installs a daily one at `CONFIG.SWEEP.TRIGGER_HOUR`). Deterministic. No Gemini. Read-only against Gmail.
@@ -145,7 +149,8 @@ Closes an open Gmail row when the last message in the thread (drafts ignored) is
 
 Rules for every channel:
 - Snoozed rows are never touched. So are rows with a Lease, Manual rows, Log rows and collector gate rows (`needs-help:`).
-- When a row closes, every open queued next step under it (`Parent` = its `_uid`, any channel, recursively) closes too, so it is never processed. Snoozed and leased next steps are left alone.
+- Only rows written by this repo's collector (`Collector` column) are judged. Child rows (non-empty `Parent`: Nik's instructions from review), Manual rows and rows Claude inserted are never judged directly.
+- When a row closes, its open children on the same `Card Key` (a queued reply to the thread that is now handled) close too, recursively. Children on another channel or card are separate instructions and stay open. Snoozed and leased children are left alone.
 - A closed row gets `Status = Done`, `Closed At` and `Closeout = "stale sweep: <reason>"` in one `update_row`. Nothing is deleted.
 - It reads and writes the sheet through the google-sheet-mcp JSON-RPC endpoint (`QueueStore.js`, shared byte-identical by the three triage repos), using the same `QUEUE_WEBHOOK_URL` and `QUEUE_API_KEY`.
 - Each run examines up to `SWEEP.MAX_ROWS_PER_RUN` rows within `SWEEP.RUN_BUDGET_MS`. The rest carry to the next run through a cursor, so every row is eventually checked.

@@ -2,7 +2,7 @@
 const path = require('path');
 const { createEnv, assert, section, done } = require('./harness');
 const root = path.join(__dirname, '..');
-const FILES = ['Config.js', 'Util.js', 'QueueSink.js', 'QueueStore.js', 'Main.js', 'GmailStaleness.js'];
+const FILES = ['Config.js', 'Util.js', 'QueueSink.js', 'QueueStore.js', 'QueueBridge.js', 'Main.js', 'GmailStaleness.js'];
 const PROPS = { QUEUE_WEBHOOK_URL: 'https://script.google.com/macros/s/X/exec', QUEUE_API_KEY: 'k123' };
 const old = new Date(Date.now() - 86400000).toISOString();
 
@@ -21,7 +21,7 @@ function sheet(rows) {
 	};
 	return { handler, updates };
 }
-const row = (uid, tid, extra) => Object.assign({ _uid: uid, Name: 'Email ' + uid, Source: 'Gmail', Kind: 'Action', Status: 'New', 'Card Key': 'gmail:' + tid, 'Source Ref': 'https://mail.google.com/mail/u/0/#all/' + tid, Lease: '', _created_at: old }, extra);
+const row = (uid, tid, extra) => Object.assign({ _uid: uid, Name: 'Email ' + uid, Source: 'Gmail', Kind: 'Action', Status: 'New', 'Card Key': 'gmail:' + tid, 'Source Ref': 'https://mail.google.com/mail/u/0/#all/' + tid, Lease: '', Collector: 'gmail-triage', _created_at: old }, extra);
 
 const msg = (from, draft) => ({ getFrom: () => from, isDraft: () => !!draft });
 function thread(id, o) {
@@ -74,20 +74,27 @@ section('snoozed row, leased row, gate row, Manual, Log never touched; unreadabl
 	assert(r.out.failed === 1, 'unreadable counted failed');
 }
 
-section('queued next steps under a closed row close with it, any channel, recursively');
+section('children: never judged directly; cascade only to open children on the same Card Key');
 {
-	const r = run([row('p', 'T1'), row('kid', 'T2', { Source: 'Slack', Parent: 'p', 'Card Key': 'slack:C1:1.1' }), row('grand', 'T2', { Source: 'Trello', Parent: 'kid' }),
-		row('leased', 'T2', { Parent: 'p', Lease: 'qp@x' }), row('snz', 'T2', { Parent: 'p', Status: 'Snoozed' }), row('other', 'T2', { Parent: 'zzz' }),
-		row('keep', 'T3')], {
+	const r = run([row('p', 'T1'),
+		row('kid', 'T1', { Parent: 'p', Collector: 'nik-review' }),                         // queued reply on the same thread
+		row('grand', 'T1', { Parent: 'kid', Collector: 'nik-review' }),
+		row('xchan', 'T1', { Source: 'Trello', Parent: 'p', 'Card Key': 'trello:AAAAAAAA', Collector: 'nik-review' }),   // another channel: own instruction
+		row('leased', 'T1', { Parent: 'p', Lease: 'qp@x' }), row('snz', 'T1', { Parent: 'p', Status: 'Snoozed' }),
+		row('orphan', 'T2', { Parent: 'zzz', Collector: 'nik-review' })], {             // its own thread is answered, but it is a child
 		T1: thread('T1', { msgs: [msg('nik@mcgaw.io')] }),
-		T2: thread('T2', { msgs: [msg('Bob <b@x.com>')] }),
-		T3: thread('T3', { msgs: [msg('Bob <b@x.com>')] })
+		T2: thread('T2', { msgs: [msg('nik@mcgaw.io')] })
 	});
-	assert(closed(r).join() === 'grand,kid,p', 'p, kid, grand closed; leased, snoozed, unrelated stay; got ' + closed(r));
-	const kid = r.updates.find(u => u.rowIdentifier.uid === 'kid');
-	assert(kid.data.Closeout.includes('parent p closed'), 'child closeout names the parent');
-	assert(r.updates.filter(u => u.rowIdentifier.uid === 'kid').length === 1, 'no double close');
+	assert(closed(r).join() === 'grand,kid,p', 'p and same-thread children closed only; got ' + closed(r));
+	assert(r.updates.find(u => u.rowIdentifier.uid === 'kid').data.Closeout.includes('parent p closed'), 'child closeout names the parent');
 	assert(r.out.cascaded === 2, 'cascade counted');
+}
+
+section('only rows written by the Gmail collector are judged');
+{
+	const r = run([row('mine', 'T1'), row('review', 'T1', { Collector: 'nik-review' }), row('none', 'T1', { Collector: '' })],
+		{ T1: thread('T1', { msgs: [msg('nik@mcgaw.io')] }) });
+	assert(closed(r).join() === 'mine', 'got ' + closed(r));
 }
 
 section('legacy Email source and ref parsing');
