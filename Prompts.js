@@ -1,7 +1,7 @@
 /**
  * Prompts for the Gmail triage agent.
  *
- * PROMPTS_VERSION 2026-10-23
+ * PROMPTS_VERSION 2026-11-10
  * Distilled from the Notion skill library. Notion is canonical. If these drift, Notion wins:
  *   - Triage rules:  email-triage "Classification Rubric" (edited 2026-09-26) and Email Triage skill (edited 2026-10-02)
  *   - Voice rules:   nik-context (edited 2026-10-01) and Brand Voice (edited 2026-09-26)
@@ -12,7 +12,7 @@
  * (ENABLE_DRAFTING = false) because Queue Processor drafts downstream. Keep this prompt in sync anyway
  * so the script can draft if it is ever turned back on.
  */
-var PROMPTS_VERSION = "2026-10-23";
+var PROMPTS_VERSION = "2026-11-10";
 
 var PROMPTS = {
   TRIAGE: `
@@ -32,12 +32,14 @@ STEP 1. IMPORTANCE (pick exactly one)
   * a status or timeline change on an active prospect deal or a client account: a reschedule, a stall, a new stakeholder, a budget or pricing signal, an escalation. Star this EVEN WHEN a teammate wrote the reply and nothing is asked of Nik
   * a job candidate writing directly about their own application, an interview, references, an offer, or a start date
   * anything that qualifies for draft_reply or notify
+  A question or call to action inside a cold pitch is not an ask of Nik. STAR is never paired with SOLICITATION.
   If a message shows a concrete status signal and you doubt it matters, STAR it. A wrong star costs seconds. A missed deal signal costs more.
   This does NOT apply when the message shows no signal at all. A vague or thin message with nothing concrete is UNSURE, not STAR.
   Narrow exception: do not STAR routine meeting-time coordination from sarah@mcgaw.io or mc@mcgaw.io on an engagement that is already moving ("does Tuesday work"). If the same message also carries a status signal, the status signal wins and it is STAR.
 - NEITHER: normal priority, read later. This is the right answer for most mail.
-- ARCHIVE: low value. Newsletters, marketing, cold outreach, vendors pitching services to McGaw (credit lines, recruiting services, sales or lead generation, HR services, agencies), irrelevant notifications, automated meeting notes or AI recordings, meeting accept or decline notices with no comment, and automated applicant-tracking notices about McGaw's own hiring (application received, stage changed). A real candidate emailing directly is NOT this. See STAR.
-- BLOCK: obvious spam or phishing, companies offering to source leads or do sales for McGaw (as opposed to a client), and podcast or interview invitations from management-consulting shows.
+- ARCHIVE: low value. Newsletters, marketing, cold outreach, vendors pitching services to McGaw (credit lines, recruiting services, sales or lead generation, HR services, agencies, meeting booking, business development or appointment setting for a commission, event or expo exhibitor sales), pitches aimed at the wrong industry (for example tax or financial-advisor software), irrelevant notifications, automated meeting notes or AI recordings, meeting accept or decline notices with no comment, and automated applicant-tracking notices about McGaw's own hiring (application received, stage changed). A real candidate emailing directly is NOT this. See STAR.
+- BLOCK: obvious spam or phishing, companies offering to source leads or do sales for McGaw (as opposed to a client), and every podcast or interview guest invitation.
+  Cold-outreach markers: opt-out lines ("reply 'no thanks'", "not a fit? tell me", "I'll leave it there", "not a priority right now?"), "mind if I send", "would you give it seven days", "happy to show you", "found you on LinkedIn", "was looking at your website", offers to book qualified meetings. A message from an unknown sender with these markers is cold outreach, even when it ends in a question to Nik.
 - UNSURE: you genuinely cannot tell. This includes a thin or vague preview with no concrete signal, such as "Any thoughts on my earlier note?" from someone the FACTS do not tie to a deal, client, or candidate. Use reason_code THIN_PREVIEW and needs_full_thread true. Never pair STAR with THIN_PREVIEW. Prefer UNSURE over a wrong ARCHIVE or BLOCK. Never choose ARCHIVE or BLOCK when the sender could be a client, prospect, candidate, or teammate.
 
 STEP 2. DRAFT_REPLY (true or false)

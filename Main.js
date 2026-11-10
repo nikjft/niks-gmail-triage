@@ -433,7 +433,8 @@ function buildFacts(allMessages, lastMsg) {
 			return isInternalEmail(f) && !isUserEmail(f);
 		});
 		var sender = extractSingleEmail(lastMsg.getFrom());
-		facts.prior_contact = facts.nik_sent_in_thread || teammateInThread || isInternalEmail(sender) || isUserEmail(sender) || hasSentTo_(sender);
+		facts.prior_contact = facts.nik_sent_in_thread || teammateInThread || isInternalEmail(sender) || isUserEmail(sender) ||
+			hasSentTo_(sender, allMessages[0].getDate());
 	} catch (e) {
 		Logger.log('buildFacts error: ' + e.toString());
 	}
@@ -441,21 +442,25 @@ function buildFacts(allMessages, lastMsg) {
 }
 
 /**
- * True when Nik has sent mail to this sender before: to the full address for freemail, else to anyone at the domain.
- * One Gmail search per sender, cached for the run. A failed search counts as contact, so it never demotes a message.
+ * True when Nik had sent mail to this sender before the thread's first message arrived: to the full address for freemail,
+ * else to anyone at the domain. Only mail sent before receipt counts, so an out-of-office auto-reply is never contact.
+ * One Gmail search per sender and time, cached for the run. A failed search counts as contact, so it never demotes a message.
  * @param {String} email
+ * @param {Date} receivedAt  date of the thread's first message
  * @return {Boolean}
  */
 var FREEMAIL_DOMAINS_ = ['gmail.com', 'googlemail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'live.com', 'icloud.com', 'me.com', 'aol.com', 'proton.me', 'protonmail.com'];
 var _sentToCache = {};
-function hasSentTo_(email) {
+function hasSentTo_(email, receivedAt) {
 	if (!email || email.indexOf('@') === -1) return true;
 	var domain = email.split('@')[1];
 	var target = FREEMAIL_DOMAINS_.indexOf(domain) !== -1 ? email : domain;
-	if (_sentToCache.hasOwnProperty(target)) return _sentToCache[target];
+	var t = receivedAt && receivedAt.getTime ? Math.floor(receivedAt.getTime() / 1000) : 0;
+	var query = 'in:sent to:' + target + (t ? ' before:' + t : '');
+	if (_sentToCache.hasOwnProperty(query)) return _sentToCache[query];
 	var found = true;
-	try { found = GmailApp.search('in:sent to:' + target, 0, 1).length > 0; } catch (e) { Logger.log('WARN sent search failed for ' + target + ': ' + e); }
-	_sentToCache[target] = found;
+	try { found = GmailApp.search(query, 0, 1).length > 0; } catch (e) { Logger.log('WARN sent search failed for ' + target + ': ' + e); }
+	_sentToCache[query] = found;
 	return found;
 }
 
@@ -541,6 +546,13 @@ function normalizeDecision(d, facts, tag) {
 		Logger.log('OVERRIDE ' + tag + ' importance "' + out.importance + '" is not valid -> UNSURE.');
 		out.importance = 'UNSURE';
 		out.reason_code = out.reason_code || 'THIN_PREVIEW';
+	}
+	// Junk is never STAR. The model sometimes names the solicitation correctly and still stars it.
+	var JUNK_CODES = { SOLICITATION: 'ARCHIVE', AUTOMATED: 'ARCHIVE', ATS_NOISE: 'ARCHIVE', SPAM: 'BLOCK' };
+	if (out.importance === 'STAR' && JUNK_CODES[out.reason_code]) {
+		Logger.log('OVERRIDE ' + tag + ' STAR/' + out.reason_code + ' -> ' + JUNK_CODES[out.reason_code] + ' (junk is never STAR).');
+		out.importance = JUNK_CODES[out.reason_code];
+		out.notify = false;
 	}
 	if ((out.importance === 'ARCHIVE' || out.importance === 'BLOCK') &&
 		(out.confidence === 'low' || out.needs_full_thread === true)) {

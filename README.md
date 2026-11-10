@@ -139,7 +139,10 @@ Offline test: `node test/offline.test.js`.
 
 ## Cold pitches posing as deal signals
 
-`buildFacts` adds `prior_contact`: true when Nik or a teammate wrote in the thread, or Nik has ever emailed the sender (the full address for freemail, else anyone at the domain; one cached `in:sent` search per sender, and a failed search counts as contact). `normalizeDecision` demotes STAR with `ACTIVE_DEAL_SIGNAL` or `CLIENT_ISSUE` to NEITHER / `SOLICITATION` when `prior_contact` is false: both codes need an existing relationship. NEITHER keeps the email in the inbox and out of the queue. A direct ask from a stranger (`ASK_OF_NIK`) is not demoted, so a real inbound lead still reaches the queue.
+Junk is never STAR: `normalizeDecision` turns STAR with `SOLICITATION`, `AUTOMATED` or `ATS_NOISE` into ARCHIVE, and STAR with `SPAM` into BLOCK (low confidence still lands on UNSURE).
+
+
+`buildFacts` adds `prior_contact`: true when Nik or a teammate wrote in the thread, or Nik emailed the sender before the thread's first message arrived (the full address for freemail, else anyone at the domain; one cached `in:sent ... before:<epoch>` search, and a failed search counts as contact). Mail sent after receipt does not count, so an out-of-office auto-reply never makes a cold sender look known. `normalizeDecision` demotes STAR with `ACTIVE_DEAL_SIGNAL` or `CLIENT_ISSUE` to NEITHER / `SOLICITATION` when `prior_contact` is false: both codes need an existing relationship. NEITHER keeps the email in the inbox and out of the queue. A direct ask from a stranger (`ASK_OF_NIK`) is not demoted, so a real inbound lead still reaches the queue.
 
 ## Staleness sweep
 

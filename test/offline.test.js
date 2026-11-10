@@ -100,6 +100,19 @@ section('cold pitch posing as a deal signal is demoted (no prior contact)');
 	assert(nd(deal, {}).importance === 'STAR' && nd(deal, null).importance === 'STAR', 'missing fact never demotes');
 }
 
+section('junk is never STAR');
+{
+	const e = mk(() => ({ code: 200, text: '{}' }));
+	const nd = (d) => JSON.parse(e.run('JSON.stringify(normalizeDecision(' + JSON.stringify(d) + ', {prior_contact:true}, "t"))'));
+	['SOLICITATION', 'AUTOMATED', 'ATS_NOISE'].forEach(c => {
+		const o = nd({ importance: 'STAR', reason_code: c, confidence: 'high', notify: true, draft_reply: true });
+		assert(o.importance === 'ARCHIVE' && !o.notify && !o.draft_reply, 'STAR/' + c + ' -> ARCHIVE');
+	});
+	assert(nd({ importance: 'STAR', reason_code: 'SPAM', confidence: 'high' }).importance === 'BLOCK', 'STAR/SPAM -> BLOCK');
+	assert(nd({ importance: 'STAR', reason_code: 'SOLICITATION', confidence: 'low' }).importance === 'UNSURE', 'low confidence still lands on UNSURE, never STAR');
+	assert(nd({ importance: 'STAR', reason_code: 'ASK_OF_NIK' }).importance === 'STAR', 'real codes untouched');
+}
+
 section('prior contact: sent-mail search by domain, by address for freemail, cached; failure counts as contact');
 {
 	const e = mk(() => ({ code: 200, text: '{}' }));
@@ -109,6 +122,8 @@ section('prior contact: sent-mail search by domain, by address for freemail, cac
 	assert(e.run("hasSentTo_('new.person@acme.com')") === true && e.ctx.__q.length === 1, 'same domain cached, one search');
 	assert(e.run("hasSentTo_('colton.manzo@serenityprovision.co')") === false, 'cold sender has no contact');
 	assert(e.run("hasSentTo_('stranger@gmail.com')") === false && e.ctx.__q.includes('in:sent to:stranger@gmail.com'), 'freemail matched by full address');
+	e.run("hasSentTo_('x@ooo.com', new Date('2026-11-06T16:14:08Z'))");
+	assert(e.ctx.__q.includes('in:sent to:ooo.com before:1793981648'), 'only mail sent before receipt counts (an out-of-office reply is after)');
 	assert(e.run("hasSentTo_('pal@gmail.com')") === true, 'freemail contact found');
 	e.run("_sentToCache = {}; GmailApp.search = function () { throw new Error('quota'); };");
 	assert(e.run("hasSentTo_('x@unknown.io')") === true, 'search failure never demotes');
@@ -118,7 +133,7 @@ section('buildFacts sets prior_contact');
 {
 	const e = mk(() => ({ code: 200, text: '{}' }));
 	e.run("GmailApp.search = function () { return []; };");
-	const M = (from) => `{ getFrom: function(){ return '${from}'; }, getTo: function(){ return 'nik@mcgaw.io'; }, getCc: function(){ return ''; }, getRawContent: function(){ return 'X: y'; } }`;
+	const M = (from) => `{ getFrom: function(){ return '${from}'; }, getTo: function(){ return 'nik@mcgaw.io'; }, getCc: function(){ return ''; }, getRawContent: function(){ return 'X: y'; }, getDate: function(){ return new Date('2026-11-06T16:14:08Z'); } }`;
 	const f = (msgs) => JSON.parse(e.run('JSON.stringify(buildFacts([' + msgs.join(',') + '], ' + msgs[msgs.length - 1] + '))'));
 	assert(f([M('Colton <colton.manzo@serenityprovision.co>')]).prior_contact === false, 'single cold message: no contact');
 	assert(f([M('Pat <pat@newco.com>'), M('Sarah <sarah@mcgaw.io>'), M('Pat <pat@newco.com>')]).prior_contact === true, 'teammate in thread counts');
