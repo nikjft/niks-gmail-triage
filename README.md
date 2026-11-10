@@ -152,6 +152,7 @@ Closes an open Gmail row when the last message in the thread (drafts ignored) is
 
 Rules for every channel:
 - Snoozed rows are never touched. So are rows with a Lease, Manual rows, Log rows and collector gate rows (`needs-help:`).
+- First, a sheet-only pass with no API calls: the collector inserts a new row for every new message, so older open rows on the same `Card Key` + `Flag Key` are superseded by the newest one (the review's current-row rule). Older rows with Status `New` close as `stale sweep: merged into <uid>`. Drafted, Approved and Waiting rows are work in motion and stay. Snoozed rows count when finding the newest. An older Snoozed row closes only when the newest row is Snoozed too; behind a newer `New` row it stays.
 - Only rows written by this repo's collector (`Collector` column) are judged. Child rows (non-empty `Parent`: Nik's instructions from review), Manual rows and rows Claude inserted are never judged directly.
 - When a row closes, its open children on the same `Card Key` (a queued reply to the thread that is now handled) close too, recursively. Children on another channel or card are separate instructions and stay open. Snoozed and leased children are left alone.
 - A closed row gets `Status = Done`, `Closed At` and `Closeout = "stale sweep: <reason>"` in one `update_row`. Nothing is deleted.

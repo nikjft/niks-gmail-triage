@@ -39,12 +39,14 @@ function unwrapRef_(s) {
 // Never judged directly: child rows (non-empty Parent, Nik's instructions), Manual rows, rows inserted by Claude or review,
 // Log rows, rows with a Lease (a worker is mid-flight), and collector gate rows (Source Ref needs-help:...).
 // Children close only through their parent (see runQueueSweep_).
-// Returns {ok, rows, children: {parentUid: [rows]}, error}.
+// Snoozed rows are read too, to find the newest row of a group (see supersededRows_). The only Snoozed rows the sweep
+// ever closes are older snoozes behind a newer snooze on the same item.
+// Returns {ok, rows, snoozed, children: {parentUid: [rows]}, error}.
 function queueReadOpenRows_(sources, opts) {
 	opts = opts || {};
 	var want = {};
 	sources.forEach(function (s) { want[String(s).toLowerCase()] = true; });
-	var filters = SWEEP_OPEN_STATUSES_.map(function (s) { return { column: 'Status', operator: 'eq', value: s }; });
+	var filters = SWEEP_OPEN_STATUSES_.concat(['Snoozed']).map(function (s) { return { column: 'Status', operator: 'eq', value: s }; });
 	var rows = [], offset = 0, limit = 200, guard = 0;
 	while (guard++ < 50) {
 		var r = queueRpc_('get_filtered_sheet_contents', {
@@ -62,11 +64,13 @@ function queueReadOpenRows_(sources, opts) {
 	rows.forEach(function (row) {
 		var par = String(row['Parent'] || '').trim();
 		if (!par || String(row['Kind'] || '') === 'Log' || String(row['Lease'] || '').trim() || !row['_uid']) return;
+		if (String(row['Status']) === 'Snoozed') return;
 		if (unwrapRef_(row['Source Ref']).indexOf('needs-help:') === 0) return;
 		(children[par] = children[par] || []).push(row);
 	});
 	rows = rows.filter(function (row) {
 		if (!want[String(row['Source'] || '').toLowerCase()]) return false;
+		if (SWEEP_OPEN_STATUSES_.indexOf(String(row['Status'])) === -1 && String(row['Status']) !== 'Snoozed') return false;
 		if (String(row['Parent'] || '').trim()) return false;
 		if (opts.collector && String(row['Collector'] || '').trim() !== opts.collector) return false;
 		if (String(row['Kind'] || '') === 'Log') return false;
@@ -74,6 +78,8 @@ function queueReadOpenRows_(sources, opts) {
 		if (unwrapRef_(row['Source Ref']).indexOf('needs-help:') === 0) return false;
 		return !!row['_uid'];
 	});
+	var snoozed = rows.filter(function (row) { return String(row['Status']) === 'Snoozed'; });
+	rows = rows.filter(function (row) { return String(row['Status']) !== 'Snoozed'; });
 	var minAgeMs = (opts.minAgeHours || 0) * 3600000;
 	if (minAgeMs) {
 		rows = rows.filter(function (row) {
@@ -82,7 +88,36 @@ function queueReadOpenRows_(sources, opts) {
 		});
 	}
 	rows.sort(function (a, b) { return (Date.parse(a['_created_at']) || 0) - (Date.parse(b['_created_at']) || 0); });
-	return { ok: true, rows: rows, children: children };
+	return { ok: true, rows: rows, snoozed: snoozed, children: children };
+}
+
+// Older rows of a thread or card that a newer collector row supersedes (the review's current-row rule).
+// Group by Card Key + Flag Key. The newest _created_at is current (Event Ts breaks a tie). Older rows with Status New close.
+// Older Snoozed rows close only when the newest row is Snoozed too (one snooze per item); behind a New row they stay.
+// Drafted, Approved and Waiting are work in motion and never close here.
+// Returns [{row, keepUid}].
+function supersededRows_(rows, snoozed) {
+	var groups = {};
+	rows.concat(snoozed || []).forEach(function (row) {
+		var key = sweepKey_(row['Card Key']);
+		if (!key) return;
+		key += '|' + String(row['Flag Key'] || '').trim();
+		(groups[key] = groups[key] || []).push(row);
+	});
+	var at = function (row) { return Date.parse(row['_created_at']) || 0; };
+	var ev = function (row) { return Date.parse(row['Event Ts']) || 0; };
+	var out = [];
+	Object.keys(groups).forEach(function (k) {
+		var g = groups[k];
+		if (g.length < 2) return;
+		g.sort(function (a, b) { return (at(b) - at(a)) || (ev(b) - ev(a)); });
+		var keep = g[0];
+		g.slice(1).forEach(function (row) {
+			var st = String(row['Status']);
+			if (st === 'New' || (st === 'Snoozed' && String(keep['Status']) === 'Snoozed')) out.push({ row: row, keepUid: keep['_uid'] });
+		});
+	});
+	return out;
 }
 
 // Closes one row. Never deletes. Returns {ok, error}.
@@ -117,6 +152,7 @@ function runQueueSweep_(cfg) {
 		}
 		var rows = read.rows, children = read.children, closedUids = {};
 		report.cascaded = 0;
+		report.merged = 0;
 		report.open = rows.length;
 		if (!rows.length) return report;
 
@@ -139,7 +175,7 @@ function runQueueSweep_(cfg) {
 			closedUids[uid] = true;
 			report.closed++;
 			if (parentUid) report.cascaded++;
-			else report.reasons[why] = (report.reasons[why] || 0) + 1;
+			else { var rk = why.replace(/ [0-9a-f-]{36}$/, ''); report.reasons[rk] = (report.reasons[rk] || 0) + 1; }
 			if (cascade) {
 				var key = sweepKey_(row['Card Key']);
 				(children[uid] || []).forEach(function (child) {
@@ -158,16 +194,21 @@ function runQueueSweep_(cfg) {
 			failed: function (row, why) { report.failed++; Logger.log('UNREADABLE ' + row['_uid'] + ': ' + why); },
 			kept: function () { report.kept++; }
 		};
+		// Sheet-only pass first: close older rows that a newer row on the same thread or card supersedes. No API calls.
+		supersededRows_(rows, read.snoozed).forEach(function (s) {
+			if (closeOne(s.row, 'merged into ' + s.keepUid, '', false)) report.merged++;
+		});
+		ordered = ordered.filter(function (row) { return !closedUids[row['_uid']]; });
 		var n = Math.min(cfg.check(ordered, ctx) || 0, ordered.length);
 		report.examined = n;
 		report.carried = ordered.length - n;
-		if (!dryRun) sp.setProperty(cfg.cursorKey, String((start + n) % rows.length));
+		if (!dryRun && ordered.length) sp.setProperty(cfg.cursorKey, String((start + n) % ordered.length));
 		return report;
 	});
 	if (!out) return null;
 	var reasons = Object.keys(out.reasons).map(function (k) { return k + ' ' + out.reasons[k]; }).join('; ');
 	Logger.log('Sweep ' + out.label + (out.dryRun ? ' (DRY RUN)' : '') + ': open ' + out.open + ', examined ' + out.examined +
-		', closed ' + out.closed + ' (incl. ' + out.cascaded + ' queued next steps of closed rows)' + (reasons ? ' (' + reasons + ')' : '') + ', kept ' + out.kept + ', unreadable/failed ' + out.failed +
+		', closed ' + out.closed + ' (incl. ' + out.cascaded + ' queued next steps of closed rows, ' + out.merged + ' merged into a newer row)' + (reasons ? ' (' + reasons + ')' : '') + ', kept ' + out.kept + ', unreadable/failed ' + out.failed +
 		', carried to next run ' + out.carried + (out.errors.length ? ' | errors: ' + out.errors.slice(0, 5).join(' | ') : ''));
 	return out;
 }

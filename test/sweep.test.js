@@ -90,6 +90,25 @@ section('children: never judged directly; cascade only to open children on the s
 	assert(r.out.cascaded === 2, 'cascade counted');
 }
 
+section('older New rows on a thread are merged into the newest (no Gmail read needed)');
+{
+	const at = (h) => new Date(Date.now() - h * 3600000).toISOString();
+	const open = (id) => thread(id, { msgs: [msg('Bob <b@x.com>')] });       // unresolved: nothing else would close these
+	const r = run([
+		row('old1', 'T1', { _created_at: at(50) }), row('old2', 'T1', { _created_at: at(30) }), row('new', 'T1', { _created_at: at(2) }),
+		row('drafted', 'T1', { _created_at: at(40), Status: 'Drafted' }),                          // work in motion: stays
+		row('snzOld', 'T2', { _created_at: at(40), Status: 'Snoozed' }), row('newT2', 'T2', { _created_at: at(1) }),
+		row('oldT3', 'T3', { _created_at: at(40) }), row('snzNew', 'T3', { _created_at: at(1), Status: 'Snoozed' }),   // newest is snoozed: older New closes
+		row('kidOld', 'T1', { _created_at: at(60), Parent: 'x', Collector: 'nik-review' }),       // child: never merged
+		row('snzA', 'T4', { _created_at: at(50), Status: 'Snoozed' }), row('snzB', 'T4', { _created_at: at(5), Status: 'Snoozed' })   // snooze closes older snooze
+	], { T1: open('T1'), T2: open('T2'), T3: open('T3'), T4: open('T4') });
+	assert(closed(r).join() === 'old1,old2,oldT3,snzA', 'snzOld stays behind a New row; snzA merges into snzB; got ' + closed(r));
+	const u = r.updates.find(x => x.rowIdentifier.uid === 'old1');
+	assert(u.data.Closeout === 'stale sweep: merged into new', 'closeout names the kept row: ' + u.data.Closeout);
+	assert(r.updates.find(x => x.rowIdentifier.uid === 'oldT3').data.Closeout.endsWith('merged into snzNew'), 'snoozed newest row is the kept row');
+	assert(r.out.merged === 4, 'merge count');
+}
+
 section('only rows written by the Gmail collector are judged');
 {
 	const r = run([row('mine', 'T1'), row('review', 'T1', { Collector: 'nik-review' }), row('none', 'T1', { Collector: '' })],
@@ -108,9 +127,10 @@ section('dry run writes nothing; cursor carries over');
 {
 	const r = run([row('a', 'T1')], { T1: thread('T1', { msgs: [msg('nik@mcgaw.io')] }) }, {}, true);
 	assert(r.updates.length === 0 && r.out.closed === 1, 'dry run reports but writes nothing');
-	const rows = [row('a', 'T1'), row('b', 'T1'), row('c', 'T1')];
+	const rows = [row('a', 'T1'), row('b', 'T2'), row('c', 'T3')];
 	const s = sheet(rows), e = createEnv(root, { files: FILES, props: PROPS, handler: s.handler });
-	e.ctx.__threads = { T1: thread('T1', { msgs: [msg('Bob <b@x.com>')] }) };
+	const busy = (id) => thread(id, { msgs: [msg('Bob <b@x.com>')] });
+	e.ctx.__threads = { T1: busy('T1'), T2: busy('T2'), T3: busy('T3') };
 	e.run(`GmailApp.getThreadById = function(id){ return __threads[id]; }; GmailApp.search = function(){ return []; }; CONFIG.SWEEP.MAX_ROWS_PER_RUN = 2;`);
 	const o1 = e.run('runGmailStalenessSweep()');
 	assert(o1.examined === 2 && o1.carried === 1, 'first run examines 2, carries 1');
