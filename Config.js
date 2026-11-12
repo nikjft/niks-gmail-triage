@@ -41,7 +41,7 @@ var CONFIG = {
 	GEMINI_MODEL_DRAFT: 'gemini-2.5-flash',
 	// ---------------- BATCH OPTIMIZATION ----------------
 	MIN_BATCH_SIZE: 5,         // Wait for 5 emails before running...
-	MAX_WAIT_TIME_MINUTES: 30, // ...unless it's been 2 hours since last run.
+	MAX_WAIT_TIME_MINUTES: 60, // ...unless it's been 60 minutes since the last run.
 
 	// Safety Flag: If false, actions like ARCHIVE/BLOCK will only label the email.
 	ENABLE_DESTRUCTIVE_ACTIONS: false,

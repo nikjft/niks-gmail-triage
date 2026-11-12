@@ -55,7 +55,7 @@ The logic respects the following categories of settings:
     - `WEBHOOK`: Drafts via Gemini and sends the draft text and `abstain_reason` directly to webhook, nowhere else (no Gmail draft created).
 - **Batching (Token Optimization)**:
   - `MIN_BATCH_SIZE`: Minimum emails required to trigger a run (e.g., `5`).
-  - `MAX_WAIT_TIME_MINUTES`: Force a run if this time has passed, even if the batch isn't full (e.g., `30`).
+  - `MAX_WAIT_TIME_MINUTES`: Force a run if this time has passed, even if the batch isn't full (`60`).
   - `MAX_EMAILS_TO_PROCESS`: Hard limit on threads per execution to avoid script timeouts (default: `30`).
 
 #### `Prompts.js` - Personalization
