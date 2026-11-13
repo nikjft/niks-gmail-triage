@@ -15,7 +15,13 @@ function refreshContextCache() {
  * TRIGGER 2: Run Hourly
  * Processes incoming mail using the cached context.
  */
-function processIncomingMail() {
+function processIncomingMail() { return processIncomingMail_({ batch: true }); }
+
+// Manual run. Classifies whatever is waiting, however few, ignoring the minimum batch.
+function processIncomingMailNow() { return processIncomingMail_({ batch: false }); }
+
+function processIncomingMail_(opts) {
+	opts = opts || {};
 	// 1. Get Context (Fast, should be cached)
 	var contextObj = buildActiveContext(false);
 	// Fallback if old cache string exists (unlikely but safe) (Actually ContextBuilder handles parsing)
@@ -62,7 +68,7 @@ function processIncomingMail() {
 	var minBatch = CONFIG.MIN_BATCH_SIZE || 0;
 	var maxWait = CONFIG.MAX_WAIT_TIME_MINUTES || 0;
 
-	if (uniqueThreads.length < minBatch && minutesSinceLastRun < maxWait) {
+	if (opts.batch !== false && uniqueThreads.length < minBatch && minutesSinceLastRun < maxWait) {
 		Logger.log(`Batching: Only ${uniqueThreads.length} emails found (min: ${minBatch}), and only ${minutesSinceLastRun.toFixed(1)} minutes since last run (max wait: ${maxWait}). Skipping processing.`);
 		return;
 	}
